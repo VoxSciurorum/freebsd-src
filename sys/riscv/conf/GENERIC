@@ -30,7 +30,7 @@ options 	INET			# InterNETworking
 options 	INET6			# IPv6 communications protocols
 options 	TCP_HHOOK		# hhook(9) framework for TCP
 options 	IPSEC_SUPPORT		# Allow kldload of ipsec and tcpmd5
-options 	ROUTE_MPATH		# Multipath routing support
+options		ROUTE_MPATH		# Multipath routing support
 options 	TCP_OFFLOAD		# TCP offload
 options 	TCP_BLACKBOX		# Enhanced TCP event logging
 options 	TCP_RFC7413		# TCP Fast Open
@@ -71,10 +71,16 @@ options 	MAC			# TrustedBSD MAC Framework
 options 	KDTRACE_FRAME		# Ensure frames are compiled in
 options 	KDTRACE_HOOKS		# Kernel DTrace hooks
 options 	DDB_CTF			# Kernel ELF linker loads CTF data
+options 	FPE			# Floating-point extension support
 options 	RACCT			# Resource accounting framework
 options 	RACCT_DEFAULT_TO_DISABLED # Set kern.racct.enable=0 by default
 options 	RCTL			# Resource limits
 options 	SMP
+
+options         KTR
+options         KTR_COMPILE=(KTR_BUF|KTR_VFS|KTR_SCHED|KTR_BUSDMA)
+options         KTR_MASK=(KTR_BUSDMA)
+options         KTR_VERBOSE=0
 
 # RISC-V SBI console
 device		rcons
@@ -82,6 +88,8 @@ device		rcons
 # pseudo devices
 device		clk
 device		hwreset
+device		phy
+device		regulator
 device		syscon
 device		syscon_power
 device		riscv_syscon
@@ -100,9 +108,6 @@ device		vtnet			# VirtIO Ethernet device
 device		virtio_blk		# VirtIO Block device
 device		virtio_mmio		# VirtIO MMIO bus
 
-# ATA/SCSI peripherals
-device		pass			# Passthrough device (direct ATA/SCSI access)
-
 # NVM Express (NVMe) support
 device		nvme		# base NVMe driver
 options 	NVME_USE_NVD=0	# prefer the cam(4) based nda(4) driver
@@ -119,6 +124,7 @@ device		usbhid			# USB HID Transport
 device		hkbd			# Keyboard
 device		ukbd			# Keyboard
 device		umass			# Disks/Mass storage - Requires scbus and da
+device		cdns                    # USB controller used by JH7110
 
 # HID support
 options 	HID_DEBUG	# enable debug msgs
@@ -138,6 +144,7 @@ device		hidbus		# Generic HID Bus
 device		uart		# Generic UART driver
 device		uart_lowrisc	# lowRISC UART driver
 device		uart_ns8250	# ns8250-type UART driver
+device		uart_snps	# DesignWare Synopsis UART driver
 
 # Console
 device		vt
@@ -149,6 +156,8 @@ device		goldfish_rtc	# QEMU RTC
 
 # Ethernet drivers
 device		cgem		# Cadence GEM Gigabit Ethernet device
+device		dwc
+device          dwc_starfive
 device		miibus		# MII bus support
 device		xae		# Xilinx AXI Ethernet MAC
 
@@ -180,7 +189,7 @@ options 	KDB			# Enable kernel debugger support.
 options 	KDB_TRACE		# Print a stack trace for a panic.
 
 # Kernel dump features.
-options 	ZSTDIO			# zstd-compressed kernel and user dumps
+options		ZSTDIO			# zstd-compressed kernel and user dumps
 
 # Pseudo devices.
 device		crypto		# core crypto support
@@ -191,6 +200,12 @@ device		tuntap		# Packet tunnel.
 device		md		# Memory "disks"
 device		gif		# IPv6 and IPv4 tunneling
 device		firmware	# firmware assist module
+
+# MMC/SD/SDIO Card slot support
+device		sdhci
+device		mmc			# mmc/sd bus
+device		mmcsd			# mmc/sd flash cards
+device		dwmmc
 
 # The `bpf' device enables the Berkeley Packet Filter.
 # Be aware of the administrative consequences of enabling this!
@@ -214,3 +229,12 @@ device		fu740_pci_dw
 device		sifive_gpio
 device		sifive_spi
 include		"../sifive/std.sifive"
+
+# JH7110 device drivers
+#device	        jh7110_gpio
+include		"../starfive/std.starfive"
+
+options         KTR
+options         KTR_COMPILE=KTR_BUSDMA
+options         KTR_MASK=KTR_BUSDMA
+options         KTR_VERBOSE=0
