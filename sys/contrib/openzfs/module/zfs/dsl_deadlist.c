@@ -999,8 +999,10 @@ livelist_compare(const void *larg, const void *rarg)
 	/* if vdevs are equal, sort by offsets. */
 	uint64_t l_dva0_offset = DVA_GET_OFFSET(&l->blk_dva[0]);
 	uint64_t r_dva0_offset = DVA_GET_OFFSET(&r->blk_dva[0]);
+#if 0 /* see bug 261538 and https://github.com/openzfs/zfs/issues/11480 */
 	if (l_dva0_offset == r_dva0_offset)
 		ASSERT3U(l->blk_birth, ==, r->blk_birth);
+#endif
 	return (TREE_CMP(l_dva0_offset, r_dva0_offset));
 }
 
