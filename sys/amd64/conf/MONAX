@@ -1,0 +1,10 @@
+include GENERIC
+
+ident   MONAX
+
+options       INVARIANTS
+options       INVARIANT_SUPPORT
+#nooptions       DEADLKRES
+#nooptions       FULL_BUF_TRACKING
+#nooptions	MALLOC_DEBUG_MAXZONES
+#nooptions	QUEUE_MACRO_DEBUG_TRASH
