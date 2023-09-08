@@ -12948,7 +12948,10 @@ bool Sema::DeduceVariableDeclarationType(VarDecl *VDecl, bool DirectInit,
   }
 
   VDecl->setType(DeducedType);
-  assert(VDecl->isLinkageValid());
+  // If the initializer references the symbol being declared
+  // the linkage may have changed.  The declaration is erroneous.
+  if (!VDecl->isLinkageValid())
+    return false;
 
   // In ARC, infer lifetime.
   if (getLangOpts().ObjCAutoRefCount && ObjC().inferObjCARCLifetime(VDecl))
