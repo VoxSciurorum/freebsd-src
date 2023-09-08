@@ -1,0 +1,5 @@
+include GENERIC
+ident	STRIATUS
+nooptions       WITNESS
+nooptions       WITNESS_SKIPSPIN
+options	ZFS
