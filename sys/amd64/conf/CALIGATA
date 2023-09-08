@@ -1,0 +1,55 @@
+include         GENERIC
+
+ident		CALIGATA
+
+makeoptions	DEBUG=-g		# Build kernel with gdb(1) debug symbols
+makeoptions	WITH_CTF=1		# Run ctfconvert(1) for DTrace support
+
+options         INVARIANTS
+options         INVARIANT_SUPPORT
+
+nodevice        mlx5
+nodevice        mlxfw
+nodevice        mlx5en
+
+nodevice	cas			# Sun Cassini/Cassini+ and NS DP83065 Saturn
+nodevice	dc			# DEC/Intel 21143 and various workalikes
+nodevice	et			# Agere ET1310 10/100/Gigabit Ethernet
+nodevice	fxp			# Intel EtherExpress PRO/100B (82557, 82558)
+nodevice	gem			# Sun GEM/Sun ERI/Apple GMAC
+nodevice	jme			# JMicron JMC250 Gigabit/JMC260 Fast Ethernet
+nodevice	lge			# Level 1 LXT1001 gigabit Ethernet
+nodevice	msk			# Marvell/SysKonnect Yukon II Gigabit Ethernet
+nodevice	nfe			# nVidia nForce MCP on-board Ethernet
+nodevice	nge			# NatSemi DP83820 gigabit Ethernet
+nodevice	re			# RealTek 8139C+/8169/8169S/8110S
+nodevice	rl			# RealTek 8129/8139
+nodevice	sge			# Silicon Integrated Systems SiS190/191
+nodevice	sis			# Silicon Integrated Systems SiS 900/SiS 7016
+nodevice	sk			# SysKonnect SK-984x & SK-982x gigabit Ethernet
+nodevice	ste			# Sundance ST201 (D-Link DFE-550TX)
+nodevice	stge			# Sundance/Tamarack TC9021 gigabit Ethernet
+nodevice	vge			# VIA VT612x gigabit Ethernet
+nodevice	vr			# VIA Rhine, Rhine II
+nodevice	xl			# 3Com 3c90x (``Boomerang'', ``Cyclone'')
+
+# RAID controllers
+nodevice	aac			# Adaptec FSA RAID
+nodevice	aacp			# SCSI passthrough for aac (requires CAM)
+nodevice	aacraid			# Adaptec by PMC RAID
+nodevice	ida			# Compaq Smart RAID
+nodevice	mfi			# LSI MegaRAID SAS
+nodevice	mlx			# Mylex DAC960 family
+nodevice	mrsas			# LSI/Avago MegaRAID SAS/SATA, 6Gb/s and 12Gb/s
+nodevice	pmspcv			# PMC-Sierra SAS/SATA Controller driver
+#XXX pointer/int warnings
+nodevice	pst			# Promise Supertrak SX6000
+nodevice	twe			# 3ware ATA RAID
+
+nodevice	malo			# Marvell Libertas wireless NICs.
+nodevice	mwl			# Marvell 88W8363 802.11n wireless NICs.
+nodevice	ral			# Ralink Technology RT2500 wireless NICs.
+
+nodevice        cbb
+nodevice        pccard
+nodevice        cardbus
