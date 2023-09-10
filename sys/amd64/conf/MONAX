@@ -2,6 +2,8 @@ include GENERIC
 
 ident   MONAX
 
+nooptions     WITNESS
+
 options       INVARIANTS
 options       INVARIANT_SUPPORT
 #nooptions       DEADLKRES
