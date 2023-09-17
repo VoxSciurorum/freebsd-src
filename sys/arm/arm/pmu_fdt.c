@@ -84,35 +84,6 @@ pmu_fdt_probe(device_t dev)
 }
 
 static int
-pmu_parse_affinity(device_t dev, struct pmu_softc *sc, struct pmu_intr *irq,
-    phandle_t xref, uint32_t mpidr)
-{
-	struct pcpu *pcpu;
-	int i, err;
-
-
-	if (xref  != 0) {
-		err = OF_getencprop(OF_node_from_xref(xref), "reg", &mpidr,
-		    sizeof(mpidr));
-		if (err < 0) {
-			device_printf(dev, "missing 'reg' property\n");
-				return (ENXIO);
-		}
-	}
-
-	for (i = 0; i < MAXCPU; i++) {
-		pcpu = pcpu_find(i);
-		if (pcpu != NULL && PCPU_GET_MPIDR(pcpu) == mpidr) {
-			irq->cpuid = i;
-			return (0);
-		}
-	}
-
-	device_printf(dev, "Cannot find CPU with MPIDR: 0x%08X\n", mpidr);
-	return (ENXIO);
-}
-
-static int
 pmu_parse_intr(device_t dev, struct pmu_softc *sc)
 {
 	bool has_affinity;
@@ -163,13 +134,7 @@ pmu_parse_intr(device_t dev, struct pmu_softc *sc)
 	 * PMU with set of generic interrupts (one per core)
 	 * Each one must be binded to exact core.
 	 */
-	err = pmu_parse_affinity(dev, sc, sc->irq + 0,
-	    has_affinity ? cpus[0] : 0, 0);
-	if (err != 0) {
-		device_printf(dev, "Cannot parse affinity for CPUid: 0\n");
-		goto done;
-	}
-
+        sc->irq[0].cpuid = 0;
 	for (i = 1; i < MAX_RLEN; i++) {
 		rid = i;
 		sc->irq[i].res = bus_alloc_resource_any(dev, SYS_RES_IRQ,
@@ -177,8 +142,7 @@ pmu_parse_intr(device_t dev, struct pmu_softc *sc)
 		if (sc->irq[i].res == NULL)
 			break;
 
-		if (intr_is_per_cpu(sc->irq[i].res))
-		{
+		if (intr_is_per_cpu(sc->irq[i].res)) {
 			device_printf(dev, "Unexpected per CPU interrupt\n");
 			err = ENXIO;
 			goto done;
@@ -191,13 +155,7 @@ pmu_parse_intr(device_t dev, struct pmu_softc *sc)
 			goto done;
 		}
 
-		err = pmu_parse_affinity(dev, sc, sc->irq + i,
-		    has_affinity ? cpus[i] : 0, i);
-		if (err != 0) {
-			device_printf(dev,
-			   "Cannot parse affinity for CPUid: %d.\n", i);
-			goto done;
-		}
+		sc->irq[i].cpuid = i;
 	}
 	err = 0;
 done:
