@@ -65,7 +65,7 @@ LIB32WMAKEFLAGS=	\
 
 .elif ${COMPAT_ARCH} == "aarch64"
 HAS_COMPAT+=	32
-.if empty(LIB32CPUTYPE)
+.if empty(${LIB32CPUTYPE:Narmv7*})
 LIB32CPUFLAGS=	-march=armv7
 .else
 LIB32CPUFLAGS=	-mcpu=${LIB32CPUTYPE}
