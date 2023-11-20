@@ -58,6 +58,12 @@ LIB32_MACHINE_ARCH=	powerpc
 LIB32WMAKEFLAGS=	\
 		LD="${XLD} -m elf32ppc_fbsd"
 
+.elif ${COMPAT_ARCH} == "aarch64"
+HAS_COMPAT+=	32
+.if empty(${LIB32CPUTYPE:Narmv7*})
+LIB32CPUFLAGS=	-march=armv7
+.endif
+
 .elif ${COMPAT_ARCH:Mmips64*} != ""
 HAS_COMPAT=32
 .if ${COMPAT_COMPILER_TYPE} == gcc
