@@ -1,0 +1,11 @@
+cpu	ARM64
+ident	ROCK64
+
+include		"std.arm64"
+include		"std.dev"
+include		"std.rockchip"
+
+options		INVARIANT_SUPPORT
+options		INVARIANTS
+nooptions	WITNESS
+#nooptions	WITNESS_SKIPSPIN
