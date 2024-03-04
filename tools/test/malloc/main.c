@@ -3,11 +3,14 @@
 #include <string.h>
 #include <unistd.h>
 
-u_long NBUCKETS		= 2000;
-u_long NOPS		= 200000;
-u_long NSIZE		= (16*1024);
+static u_long NBUCKETS	= 2000;
+static u_long NOPS	= 200000;
+static u_long NSIZE	= (16*1024);
 
+extern char **foo;
 char **foo;
+
+extern __attribute__((weak)) void *sbrk(intptr_t);
 
 int
 main(int argc, char **argv) 
@@ -17,7 +20,7 @@ main(int argc, char **argv)
     if (argc > 1) NOPS     = strtoul(argv[1],0,0);
     if (argc > 2) NBUCKETS = strtoul(argv[2],0,0);
     if (argc > 3) NSIZE	   = strtoul(argv[3],0,0);
-    printf("BRK(0)=%p ", sbrk(0));
+    if (sbrk) printf("BRK(0)=%p ", sbrk(0));
     foo = malloc(sizeof(*foo) * NBUCKETS);
     memset(foo, 0, sizeof(*foo) * NBUCKETS);
     for (i = 1; i <= 4096; i *= 2) {
@@ -44,7 +47,7 @@ main(int argc, char **argv)
 	if (foo[j])
 	    foo[j][0] = 1;
     }
-    printf("BRK(1)=%p ", sbrk(0));
+    if (sbrk) printf("BRK(0)=%p ", sbrk(0));
     for (j = 0; j < NBUCKETS; j++) {
 	if (foo[j]) {
 	    free(foo[j]);
@@ -52,6 +55,6 @@ main(int argc, char **argv)
 	}
     }
     printf("BRK(2)=%p NOPS=%lu NBUCKETS=%lu NSIZE=%lu\n",
-	sbrk(0), NOPS, NBUCKETS, NSIZE);
+	sbrk ? sbrk(0) : 0, NOPS, NBUCKETS, NSIZE);
     return 0;
 }

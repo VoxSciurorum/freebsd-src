@@ -41,7 +41,7 @@
 
 void usage(void);
 
-void usage()
+void usage(void)
 {
 	err(EX_USAGE, "listen [-p port] [-l limit]\n");
 }
