@@ -355,6 +355,10 @@ input_buffer::consume_integer(unsigned long long &outInt)
 	{
 		return false;
 	}
+	if (*end == 'u' || *end == 'U')
+	{
+		++end;
+	}
 	cursor = end - buffer;
 	return true;
 }
