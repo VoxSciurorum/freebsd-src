@@ -1,0 +1,39 @@
+include	GENERIC
+
+ident	MERRIAMI
+
+nooptions	WITNESS
+
+nodevice        mlx5
+nodevice        mlxfw
+nodevice        mlx5en
+
+nooptions 	COMPAT_FREEBSD4		# Compatible with FreeBSD4
+nooptions 	COMPAT_FREEBSD5		# Compatible with FreeBSD5
+nooptions 	COMPAT_FREEBSD6		# Compatible with FreeBSD6
+nooptions 	COMPAT_FREEBSD7		# Compatible with FreeBSD7
+nooptions 	COMPAT_FREEBSD9		# Compatible with FreeBSD9
+nooptions 	COMPAT_FREEBSD10	# Compatible with FreeBSD10
+
+nodevice	arcmsr			# Areca SATA II RAID
+nodevice	ciss			# Compaq Smart RAID 5*
+nodevice	ips			# IBM (Adaptec) ServeRAID
+nodevice	smartpqi		# Microsemi smartpqi driver
+nodevice	tws			# LSI 3ware 9750 SATA+SAS 6Gb/s RAID controller
+
+# RAID controllers
+nodevice	aac			# Adaptec FSA RAID
+nodevice	aacp			# SCSI passthrough for aac (requires CAM)
+nodevice	aacraid			# Adaptec by PMC RAID
+nodevice	ida			# Compaq Smart RAID
+nodevice	mfi			# LSI MegaRAID SAS
+nodevice	mlx			# Mylex DAC960 family
+nodevice	mrsas			# LSI/Avago MegaRAID SAS/SATA, 6Gb/s and 12Gb/s
+
+nodevice	ae			# Attansic/Atheros L2 FastEthernet
+nodevice	age			# Attansic/Atheros L1 Gigabit Ethernet
+nodevice	alc			# Atheros AR8131/AR8132 Ethernet
+nodevice	ale			# Atheros AR8121/AR8113/AR8114 Ethernet
+nodevice	bce			# Broadcom BCM5706/BCM5708 Gigabit Ethernet
+
+nodevice	nfe			# nVidia nForce MCP on-board Ethernet
