@@ -135,6 +135,7 @@
 #define	SENSOR_ENABLE_ALL	(SENSOR0_EN|SENSOR1_EN|SENSOR2_EN)
 #define	SHUT_INT_ALL		(SHUT_INT0_STS|SHUT_INT1_STS|SHUT_INT2_STS)
 #define	ALARM_INT_ALL		(ALARM_INT0_STS)
+#define INT_MASK		(ALARM_INT_ALL | SHUT_INT_ALL)
 
 #define	MAX_SENSORS	3
 #define	MAX_CF_LEVELS	64
@@ -142,7 +143,9 @@
 #define	THROTTLE_ENABLE_DEFAULT	1
 
 /* Enable thermal throttling */
+static int aw_thermal_interrupt_enable = 0;
 static int aw_thermal_throttle_enable = THROTTLE_ENABLE_DEFAULT;
+TUNABLE_INT("hw.aw_thermal.interrupt_enable", &aw_thermal_interrupt_enable);
 TUNABLE_INT("hw.aw_thermal.throttle_enable", &aw_thermal_throttle_enable);
 
 struct aw_thermal_sensor {
@@ -379,7 +382,7 @@ aw_thermal_init(struct aw_thermal_softc *sc)
 {
 	phandle_t node;
 	uint32_t calib[2];
-	int error;
+	int error, interrupts;
 
 	node = ofw_bus_get_node(sc->dev);
 	if (nvmem_get_cell_len(node, "calibration") > sizeof(calib)) {
@@ -416,7 +419,9 @@ aw_thermal_init(struct aw_thermal_softc *sc)
 
 	/* Enable interrupts */
 	WR4(sc, THS_INTS, RD4(sc, THS_INTS));
-	WR4(sc, THS_INTC, RD4(sc, THS_INTC) | SHUT_INT_ALL | ALARM_INT_ALL);
+	interrupts = RD4(sc, THS_INTC) & ~INT_MASK;
+	interrupts |= aw_thermal_interrupt_enable & INT_MASK;
+	WR4(sc, THS_INTC, interrupts);
 
 	/* Enable sensors */
 	WR4(sc, THS_CTRL2, RD4(sc, THS_CTRL2) | SENSOR_ENABLE_ALL);
