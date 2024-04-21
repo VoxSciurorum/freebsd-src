@@ -173,7 +173,7 @@ struct aw_thermal_config {
 static int
 a83t_to_temp(uint32_t val, int sensor)
 {
-	return ((A83T_TEMP_BASE - (val * A83T_TEMP_MUL)) / A83T_TEMP_DIV);
+	return ((A83T_TEMP_BASE - ((int)val * A83T_TEMP_MUL)) / A83T_TEMP_DIV);
 }
 
 static const struct aw_thermal_config a83t_config = {
@@ -430,7 +430,7 @@ aw_thermal_gettemp(struct aw_thermal_softc *sc, int sensor)
 {
 	uint32_t val;
 
-	val = RD4(sc, THS_DATA0 + (sensor * 4));
+	val = RD4(sc, THS_DATA0 + (sensor * 4)) & DATA_MASK;
 
 	return (sc->conf->to_temp(val, sensor));
 }
