@@ -1,0 +1,12 @@
+include GENERIC
+
+ident STAR64
+
+device	eqos
+
+device	nfscl
+device	nullfs
+device	tarfs
+device	tmpfs
+
+# options	BOOTVERBOSE=1
