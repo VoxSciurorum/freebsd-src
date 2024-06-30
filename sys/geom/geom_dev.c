@@ -355,6 +355,10 @@ g_dev_taste(struct g_class *mp, struct g_provider *pp, int insist __unused)
 	struct make_dev_args args;
 
 	g_trace(G_T_TOPOLOGY, "dev_taste(%s,%s)", mp->name, pp->name);
+
+        if (pp->sectorsize == 0 || pp->mediasize % pp->sectorsize != 0)
+		return (NULL);
+
 	g_topology_assert();
 	gp = g_new_geomf(mp, "%s", pp->name);
 	sc = g_malloc(sizeof(*sc), M_WAITOK | M_ZERO);

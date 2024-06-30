@@ -887,6 +887,9 @@ g_part_gpt_probe(struct g_part_table *table, struct g_consumer *cp)
 	if (pp->sectorsize < MBRSIZE || pp->mediasize < 6 * pp->sectorsize)
 		return (ENOSPC);
 
+	if (pp->mediasize % pp->sectorsize != 0)
+		return (EINVAL);
+
 	/*
 	 * Check that there's a MBR or a PMBR. If it's a PMBR, we return
 	 * as the highest priority on a match, otherwise we assume some
