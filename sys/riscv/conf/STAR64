@@ -2,6 +2,8 @@ include GENERIC
 
 ident STAR64
 
+options	MD_ROOT
+
 device	eqos
 
 device	nfscl
