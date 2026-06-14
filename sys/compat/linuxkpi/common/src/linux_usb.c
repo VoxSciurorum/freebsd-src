@@ -525,6 +525,7 @@ usb_unlink_urb_sub(struct urb *urb, uint8_t drain)
 		if (urb->complete) {
 			(urb->complete) (urb);
 		}
+		usb_unanchor_urb(urb);
 	} else {
 		/*
 		 * If the URB is not on the URB list, then check if one of
@@ -534,6 +535,7 @@ usb_unlink_urb_sub(struct urb *urb, uint8_t drain)
 		 */
 		usb_unlink_bsd(uhe->bsd_xfer[0], urb, drain);
 		usb_unlink_bsd(uhe->bsd_xfer[1], urb, drain);
+                /* XXX urb_anchor changes needed here? */
 	}
 	err = 0;
 done:
@@ -1217,6 +1219,11 @@ usb_free_urb(struct urb *urb)
 	if (urb == NULL) {
 		return;
 	}
+	/* For simplicity, a zero-filled urb has logical reference count 1. */
+	if (urb->ref_count-- > 0) {
+		return;
+	}
+
 	/* make sure that the current URB is not active */
 	usb_kill_urb(urb);
 
@@ -1319,6 +1326,7 @@ usb_linux_complete(struct usb_xfer *xfer)
 	if (urb->complete) {
 		(urb->complete) (urb);
 	}
+	usb_unanchor_urb(urb);
 }
 
 /*------------------------------------------------------------------------*
@@ -1708,6 +1716,50 @@ usb_bulk_msg(struct usb_device *udev, struct usb_host_endpoint *uhe,
 
 	return (err);
 }
+
+/* URB Anchors.  Caller responsible for locks. */
+void
+usb_anchor_urb(struct urb *urb, struct usb_anchor *anchor)
+{
+	if (urb == NULL || anchor == NULL)
+		return;
+	++urb->ref_count;
+	urb->anchor = anchor;
+	TAILQ_INSERT_TAIL(&anchor->urbs, urb, bsd_anchor_list);
+}
+
+void
+usb_unanchor_urb(struct urb *urb)
+{
+	struct usb_anchor *anchor;
+	if (urb == NULL)
+		return;
+	anchor = urb->anchor;
+	if (anchor == NULL)
+		return;
+	urb->anchor = NULL;
+	TAILQ_REMOVE(&anchor->urbs, urb, bsd_anchor_list);
+	/* Free will do nothing here unless the driver has already
+	   released its own reference. */
+	usb_free_urb(urb);
+}
+
+void
+usb_kill_anchored_urbs(struct usb_anchor *anchor)
+{
+	struct urb *urb;
+	TAILQ_FOREACH(urb, &anchor->urbs, bsd_anchor_list) {
+		usb_kill_urb(urb);
+	}
+	/* XXX Is this correct?  Should the function wait for completion? */
+}
+
+void
+init_usb_anchor(struct usb_anchor *anchor)
+{
+	TAILQ_INIT(&anchor->urbs);
+}
+
 MODULE_DEPEND(linuxkpi, usb, 1, 1, 1);
 
 static void
