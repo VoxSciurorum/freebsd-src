@@ -55,6 +55,19 @@ typedef void (usb_complete_t)(struct urb *);
 	.match_flags = USB_DEVICE_ID_MATCH_DEVICE, .idVendor = (vend), \
 	.idProduct = (prod)
 
+#define USB_DEVICE_AND_INTERFACE_INFO(VENDOR, PRODUCT, CLASS, SUBCLASS, PROTOCOL) \
+	.match_flags =							   \
+		(USB_DEVICE_ID_MATCH_VENDOR|				   \
+		 USB_DEVICE_ID_MATCH_PRODUCT|				   \
+		 ((CLASS) != 0xff ? USB_DEVICE_ID_MATCH_DEV_CLASS : 0)|	   \
+		 ((SUBCLASS) != 0xff ? USB_DEVICE_ID_MATCH_DEV_SUBCLASS : 0)|  \
+		 ((PROTOCOL) != 0xff ? USB_DEVICE_ID_MATCH_DEV_PROTOCOL : 0)), \
+	.idVendor = (VENDOR), \
+	.idProduct = (PRODUCT), \
+	.bDeviceClass = (CLASS), \
+	.bDeviceSubClass = (SUBCLASS), \
+	.bInterfaceProtocol = (PROTOCOL)
+
 /* The "usb_driver" structure holds the Linux USB device driver
  * callbacks, and a pointer to device ID's which this entry should
  * match against. Usually this entry is exposed to the USB emulation
