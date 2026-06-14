@@ -228,6 +228,11 @@ struct usb_iso_packet_descriptor {
 	 int16_t status;		/* transfer status */
 };
 
+struct usb_anchor {
+	TAILQ_HEAD(, urb) urbs;
+	/* No lock: Linux USB code is giant locked */
+};
+
 /*
  * The following structure holds various information about an USB
  * transfer. This structure is used for all kinds of USB transfers.
@@ -236,6 +241,7 @@ struct usb_iso_packet_descriptor {
  */
 struct urb {
 	TAILQ_ENTRY(urb) bsd_urb_list;
+	TAILQ_ENTRY(urb) bsd_anchor_list;
 	struct cv cv_wait;
 
 	struct usb_device *dev;		/* (in) pointer to associated device */
@@ -272,6 +278,10 @@ struct urb {
 	uint8_t	bsd_isread;
 	uint8_t kill_count;		/* FreeBSD specific */
 
+	uint8_t ref_count;		/* Add 1 to get real count */
+
+	struct usb_anchor *anchor;
+
 	struct usb_iso_packet_descriptor iso_frame_desc[];	/* (in) ISO ONLY */
 };
 
@@ -287,6 +297,11 @@ int	usb_set_interface(struct usb_device *dev, uint8_t ifnum,
 	    uint8_t alternate);
 int	usb_setup_endpoint(struct usb_device *dev,
 	    struct usb_host_endpoint *uhe, usb_frlength_t bufsize);
+
+void	usb_anchor_urb(struct urb *urb, struct usb_anchor *anchor);
+void	usb_unanchor_urb(struct urb *urb);
+void	usb_kill_anchored_urbs(struct usb_anchor *anchor);
+void	init_usb_anchor(struct usb_anchor *anchor);
 
 struct usb_host_endpoint *usb_find_host_endpoint(struct usb_device *dev,
 	    uint8_t type, uint8_t ep);
