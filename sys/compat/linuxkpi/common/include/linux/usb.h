@@ -311,6 +311,14 @@ int	usb_set_interface(struct usb_device *dev, uint8_t ifnum,
 int	usb_setup_endpoint(struct usb_device *dev,
 	    struct usb_host_endpoint *uhe, usb_frlength_t bufsize);
 
+int	usb_endpoint_num(struct usb_endpoint_descriptor *endpoint);
+int	usb_endpoint_dir_in(struct usb_endpoint_descriptor *endpoint);
+int	usb_endpoint_dir_out(struct usb_endpoint_descriptor *endpoint);
+int	usb_endpoint_xfer_bulk(struct usb_endpoint_descriptor *endpoint);
+int	usb_endpoint_xfer_control(struct usb_endpoint_descriptor *endpoint);
+int	usb_endpoint_xfer_int(struct usb_endpoint_descriptor *endpoint);
+int	usb_endpoint_xfer_isoc(struct usb_endpoint_descriptor *endpoint);
+
 void	usb_anchor_urb(struct urb *urb, struct usb_anchor *anchor);
 void	usb_unanchor_urb(struct urb *urb);
 void	usb_kill_anchored_urbs(struct usb_anchor *anchor);
