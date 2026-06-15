@@ -276,8 +276,8 @@ struct usb_device {
 	/* Linux compat */
 	struct usb_device_descriptor descriptor;
 	struct usb_host_endpoint ep0;
-	struct usb_interface *linux_iface_start;
-	struct usb_interface *linux_iface_end;
+	struct _lkpi_usb_interface *linux_iface_start;
+	struct _lkpi_usb_interface *linux_iface_end;
 	struct usb_host_endpoint *linux_endpoint_start;
 	struct usb_host_endpoint *linux_endpoint_end;
 	uint16_t devnum;

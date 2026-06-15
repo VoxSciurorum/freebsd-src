@@ -30,7 +30,7 @@ struct usb_fifo;
 struct usb_xfer;
 struct usb_device;
 struct usb_attach_arg;
-struct usb_interface;
+struct _fbsd_usb_interface;
 struct usb_endpoint;
 struct usb_page_cache;
 struct usb_page_search;
@@ -169,8 +169,9 @@ struct usb_endpoint {
 
 /*
  * The following structure defines an USB interface.
+ * The prefix distinguishes it from Linux KPI usb_interface.
  */
-struct usb_interface {
+struct _fbsd_usb_interface {
 	struct usb_interface_descriptor *idesc;
 	device_t subdev;
 	/* Total number of alternate settings, from 1 to 256 */
@@ -178,15 +179,12 @@ struct usb_interface {
 	/* Current alternate interface index, from 0 to 255 */
 	uint8_t	alt_index;
 	uint8_t	parent_iface_index;
-
-	/* Linux compat */
-	struct usb_host_interface *altsetting;
-	struct usb_host_interface *cur_altsetting;
-	struct usb_device *linux_udev;
-	void   *bsd_priv_sc;		/* device specific information */
 	char   *pnpinfo;		/* additional PnP-info for this interface */
-	uint8_t	bsd_iface_index;
 };
+
+struct _lkpi_usb_interface;
+
+#define usb_interface _fbsd_usb_interface
 
 /*
  * The following structure defines a set of USB transfer flags.
