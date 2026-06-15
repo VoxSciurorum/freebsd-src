@@ -70,7 +70,7 @@ struct usb_linux_softc {
 
 	device_t sc_fbsd_dev;
 	struct usb_device *sc_fbsd_udev;
-	struct usb_interface *sc_ui;
+	struct _lkpi_usb_interface *sc_ui;
 	struct usb_driver *sc_udrv;
 };
 
@@ -93,7 +93,7 @@ static const struct usb_device_id *usb_linux_lookup_id(
 static struct	usb_driver *usb_linux_get_usb_driver(struct usb_linux_softc *);
 static int	usb_linux_create_usb_device(struct usb_device *, device_t);
 static void	usb_linux_cleanup_interface(struct usb_device *,
-		    struct usb_interface *);
+		    struct _lkpi_usb_interface *);
 static void	usb_linux_complete(struct usb_xfer *);
 static int	usb_unlink_urb_sub(struct urb *, uint8_t);
 
@@ -101,8 +101,8 @@ static int	usb_unlink_urb_sub(struct urb *, uint8_t);
  * FreeBSD USB interface
  *------------------------------------------------------------------------*/
 
-static LIST_HEAD(, usb_linux_softc) usb_linux_attached_list;
-static LIST_HEAD(, usb_driver) usb_linux_driver_list;
+static BSD_LIST_HEAD(, usb_linux_softc) usb_linux_attached_list;
+static BSD_LIST_HEAD(, usb_driver) usb_linux_driver_list;
 
 static device_method_t usb_linux_methods[] = {
 	/* Device interface */
@@ -744,7 +744,7 @@ usb_control_msg(struct usb_device *dev, struct usb_host_endpoint *uhe,
 int
 usb_set_interface(struct usb_device *dev, uint8_t iface_no, uint8_t alt_index)
 {
-	struct usb_interface *p_ui = usb_ifnum_to_if(dev, iface_no);
+	struct _lkpi_usb_interface *p_ui = usb_ifnum_to_if(dev, iface_no);
 	int err;
 
 	if (p_ui == NULL)
@@ -849,6 +849,38 @@ usb_setup_endpoint(struct usb_device *dev,
 	return (0);
 }
 
+/* Based on lkpi_pci_dev_release. */
+static void
+lkpi_usb_dev_release(struct device *dev)
+{
+
+	lkpi_devres_release_free_list(dev);
+	spin_lock_destroy(&dev->devres_lock);
+}
+
+/* Copied from lkpifill_pci_dev */
+static int
+lkpifill_usb_dev(device_t dev, struct _lkpi_usb_interface *intf)
+{
+	int error;
+
+	error = kobject_init_and_add(&intf->dev.kobj, &linux_dev_ktype,
+	    &linux_root_device.kobj, device_get_nameunit(dev));
+	if (error != 0) {
+		printf("%s:%d: kobject_init_and_add returned %d\n",
+		    __func__, __LINE__, error);
+		return (error);
+	}
+
+	intf->dev.bsddev = dev;
+	intf->dev.parent = &linux_root_device;
+	intf->dev.release = lkpi_usb_dev_release;
+	spin_lock_init(&intf->dev.devres_lock);
+	INIT_LIST_HEAD(&intf->dev.devres_head);
+	INIT_LIST_HEAD(&intf->dev.irqents);
+	return 0;
+}
+
 /*------------------------------------------------------------------------*
  *	usb_linux_create_usb_device
  *
@@ -863,7 +895,7 @@ usb_linux_create_usb_device(struct usb_device *udev, device_t dev)
 	struct usb_descriptor *desc;
 	struct usb_interface_descriptor *id;
 	struct usb_endpoint_descriptor *ed;
-	struct usb_interface *p_ui = NULL;
+	struct _lkpi_usb_interface *p_ui = NULL;
 	struct usb_host_interface *p_uhi = NULL;
 	struct usb_host_endpoint *p_uhe = NULL;
 	usb_size_t size;
@@ -931,6 +963,7 @@ usb_linux_create_usb_device(struct usb_device *udev, device_t dev)
 				niface_total++;
 				if (iface_no_curr != iface_no) {
 					if (p_ui) {
+						lkpifill_usb_dev(dev, p_ui);
 						p_ui->altsetting = p_uhi - 1;
 						p_ui->cur_altsetting = p_uhi - 1;
 						p_ui->bsd_iface_index = iface_index;
@@ -1022,7 +1055,7 @@ usb_find_host_endpoint(struct usb_device *dev, uint8_t type, uint8_t ep)
 	struct usb_host_endpoint *uhe;
 	struct usb_host_endpoint *uhe_end;
 	struct usb_host_interface *uhi;
-	struct usb_interface *ui;
+	struct _lkpi_usb_interface *ui;
 	uint8_t ea;
 	uint8_t at;
 	uint8_t mask;
@@ -1078,7 +1111,7 @@ usb_find_host_endpoint(struct usb_device *dev, uint8_t type, uint8_t ep)
  * characteristics.
  *------------------------------------------------------------------------*/
 struct usb_host_interface *
-usb_altnum_to_altsetting(const struct usb_interface *intf, uint8_t alt_index)
+usb_altnum_to_altsetting(const struct _lkpi_usb_interface *intf, uint8_t alt_index)
 {
 	if (alt_index >= intf->num_altsetting) {
 		return (NULL);
@@ -1092,10 +1125,10 @@ usb_altnum_to_altsetting(const struct usb_interface *intf, uint8_t alt_index)
  * The following function searches up an USB interface by
  * "bInterfaceNumber". If no match is found, NULL is returned.
  *------------------------------------------------------------------------*/
-struct usb_interface *
+struct _lkpi_usb_interface *
 usb_ifnum_to_if(struct usb_device *dev, uint8_t iface_no)
 {
-	struct usb_interface *p_ui;
+	struct _lkpi_usb_interface *p_ui;
 
 	for (p_ui = dev->linux_iface_start;
 	    p_ui != dev->linux_iface_end;
@@ -1118,10 +1151,10 @@ usb_buffer_alloc(struct usb_device *dev, usb_size_t size, uint16_t mem_flags, ui
 }
 
 /*------------------------------------------------------------------------*
- *	usbd_get_intfdata
+ *	usb_get_intfdata
  *------------------------------------------------------------------------*/
 void   *
-usbd_get_intfdata(struct usb_interface *intf)
+usb_get_intfdata(struct _lkpi_usb_interface *intf)
 {
 	return (intf->bsd_priv_sc);
 }
@@ -1266,7 +1299,7 @@ usb_kill_urb(struct urb *urb)
  * data pointer. It is used by most Linux USB device drivers.
  *------------------------------------------------------------------------*/
 void
-usb_set_intfdata(struct usb_interface *intf, void *data)
+usb_set_intfdata(struct _lkpi_usb_interface *intf, void *data)
 {
 	intf->bsd_priv_sc = data;
 }
@@ -1278,7 +1311,7 @@ usb_set_intfdata(struct usb_interface *intf, void *data)
  * associated with a Linux USB interface. It is for internal use only.
  *------------------------------------------------------------------------*/
 static void
-usb_linux_cleanup_interface(struct usb_device *dev, struct usb_interface *iface)
+usb_linux_cleanup_interface(struct usb_device *dev, struct _lkpi_usb_interface *iface)
 {
 	struct usb_host_interface *uhi;
 	struct usb_host_interface *uhi_end;

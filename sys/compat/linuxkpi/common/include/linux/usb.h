@@ -36,10 +36,11 @@
 #include <dev/usb/usbdi.h>
 #include <dev/usb/usbdi_util.h>
 
+#include <linux/device.h>
 #include <linux/pm.h>
 
 struct usb_device;
-struct usb_interface;
+struct _lkpi_usb_interface;
 struct usb_driver;
 struct urb;
 
@@ -68,6 +69,20 @@ typedef void (usb_complete_t)(struct urb *);
 	.bDeviceSubClass = (SUBCLASS), \
 	.bInterfaceProtocol = (PROTOCOL)
 
+struct _lkpi_usb_interface {
+	struct device dev;
+	/* Total number of alternate settings, from 1 to 256 */
+	uint16_t num_altsetting;
+	uint8_t	bsd_iface_index;
+	struct usb_host_interface *altsetting;
+	struct usb_host_interface *cur_altsetting;
+	struct usb_device *linux_udev;
+	void   *bsd_priv_sc;		/* device specific information */
+};
+
+#undef usb_interface
+#define usb_interface _lkpi_usb_interface
+
 /* The "usb_driver" structure holds the Linux USB device driver
  * callbacks, and a pointer to device ID's which this entry should
  * match against. Usually this entry is exposed to the USB emulation
@@ -77,19 +92,19 @@ typedef void (usb_complete_t)(struct urb *);
 struct usb_driver {
 	const char *name;
 
-	int (*probe)(struct usb_interface *intf,
+	int (*probe)(struct _lkpi_usb_interface *intf,
 	    const struct usb_device_id *id);
 
-	void (*disconnect)(struct usb_interface *intf);
+	void (*disconnect)(struct _lkpi_usb_interface *intf);
 
-	int (*ioctl)(struct usb_interface *intf, unsigned int code, void *buf);
+	int (*ioctl)(struct _lkpi_usb_interface *intf, unsigned int code, void *buf);
 
-	int (*suspend)(struct usb_interface *intf, pm_message_t message);
-	int (*resume)(struct usb_interface *intf);
+	int (*suspend)(struct _lkpi_usb_interface *intf, pm_message_t message);
+	int (*resume)(struct _lkpi_usb_interface *intf);
 
 	const struct usb_device_id *id_table;
 
-	void (*shutdown)(struct usb_interface *intf);
+	void (*shutdown)(struct _lkpi_usb_interface *intf);
 
 	LIST_ENTRY(usb_driver) linux_driver_list;
 };
@@ -328,18 +343,18 @@ struct usb_host_endpoint *usb_find_host_endpoint(struct usb_device *dev,
 	    uint8_t type, uint8_t ep);
 struct urb *usb_alloc_urb(uint16_t iso_packets, uint16_t mem_flags);
 struct usb_host_interface *usb_altnum_to_altsetting(
-	    const struct usb_interface *intf, uint8_t alt_index);
-struct usb_interface *usb_ifnum_to_if(struct usb_device *dev, uint8_t iface_no);
+	    const struct _lkpi_usb_interface *intf, uint8_t alt_index);
+struct _lkpi_usb_interface *usb_ifnum_to_if(struct usb_device *dev, uint8_t iface_no);
 
 void   *usb_buffer_alloc(struct usb_device *dev, usb_size_t size,
 	    uint16_t mem_flags, uint8_t *dma_addr);
-void   *usbd_get_intfdata(struct usb_interface *intf);
 
 void	usb_buffer_free(struct usb_device *dev, usb_size_t size, void *addr, uint8_t dma_addr);
 void	usb_free_urb(struct urb *urb);
 void	usb_init_urb(struct urb *urb);
 void	usb_kill_urb(struct urb *urb);
-void	usb_set_intfdata(struct usb_interface *intf, void *data);
+void   *usb_get_intfdata(struct _lkpi_usb_interface *intf);
+void	usb_set_intfdata(struct _lkpi_usb_interface *intf, void *data);
 void	usb_linux_register(void *arg);
 void	usb_linux_deregister(void *arg);
 

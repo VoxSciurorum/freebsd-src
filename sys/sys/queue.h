@@ -587,10 +587,11 @@ struct {								\
  * List declarations.
  */
 
-#define LIST_HEAD(name, type)						\
+#define BSD_LIST_HEAD(name, type)					\
 struct name {								\
 	struct type *lh_first;	/* first element */			\
 }
+#define LIST_HEAD(name, type) BSD_LIST_HEAD(name, type)
 
 #define LIST_CLASS_HEAD(name, type)					\
 struct name {								\
