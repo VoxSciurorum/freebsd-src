@@ -69,6 +69,12 @@ typedef void (usb_complete_t)(struct urb *);
 	.bDeviceSubClass = (SUBCLASS), \
 	.bInterfaceProtocol = (PROTOCOL)
 
+#define MODULE_DEVICE_TABLE_BUS_usb(_bus, _table)			\
+	USB_PNP_DEVICE_INFO(_table)
+
+#define module_usb_driver(_drv)						\
+    module_driver(_drv, usb_linux_register, usb_linux_deregister)
+
 struct _lkpi_usb_interface {
 	struct device dev;
 	/* Total number of alternate settings, from 1 to 256 */
@@ -355,7 +361,7 @@ void	usb_init_urb(struct urb *urb);
 void	usb_kill_urb(struct urb *urb);
 void   *usb_get_intfdata(struct _lkpi_usb_interface *intf);
 void	usb_set_intfdata(struct _lkpi_usb_interface *intf, void *data);
-void	usb_linux_register(void *arg);
+int	usb_linux_register(void *arg);
 void	usb_linux_deregister(void *arg);
 
 void	usb_fill_bulk_urb(struct urb *, struct usb_device *,
@@ -365,5 +371,13 @@ int	usb_bulk_msg(struct usb_device *, struct usb_host_endpoint *,
 
 #define	interface_to_usbdev(intf) (intf)->linux_udev
 #define	interface_to_bsddev(intf) (intf)->linux_udev
+
+/* Reference count manipulation. */
+#define usb_get_dev(udev) (udev)
+#define usb_put_dev(udev) ((void)0)
+
+extern int usb_reset_device(struct usb_device *dev);
+
+#define USB_STATE_NOTATTACHED USB_STATE_DETACHED
 
 #endif					/* _USB_COMPAT_LINUX_H */
