@@ -259,6 +259,7 @@ usb_linux_attach(device_t dev)
 	struct usb_linux_softc *sc = device_get_softc(dev);
 	struct usb_driver *udrv;
 	const struct usb_device_id *id = NULL;
+	int error = 0;
 
 	mtx_lock(&Giant);
 	LIST_FOREACH(udrv, &usb_linux_driver_list, linux_driver_list) {
@@ -271,8 +272,9 @@ usb_linux_attach(device_t dev)
 	if (id == NULL) {
 		return (ENXIO);
 	}
-	if (usb_linux_create_usb_device(uaa->device, dev) != 0)
-		return (ENOMEM);
+	error = usb_linux_create_usb_device(uaa->device, dev);
+	if (error != 0)
+		return error;
 	device_set_usb_desc(dev);
 
 	sc->sc_fbsd_udev = uaa->device;
@@ -881,6 +883,58 @@ lkpifill_usb_dev(device_t dev, struct _lkpi_usb_interface *intf)
 	return 0;
 }
 
+/*
+ * counts[0] = endpoint count (maximum 16 * 256)
+ * counts[1] = interface count combining alternates (maximum 256)
+ * counts[2] = interface count including alternates (maximum 256)
+ * Returns true if the descriptors made sense.
+ * 
+ */
+static bool
+count_usb_children(struct usb_config_descriptor *cd, unsigned int counts[3])
+{
+	struct usb_descriptor *desc = NULL;
+	const int id_size = sizeof(struct usb_interface_descriptor);
+	const int ed_size = sizeof(struct usb_endpoint_descriptor);
+	struct usb_interface_descriptor *id;
+	int last_iface = -1;
+	int endpoints_this_interface = 0;
+
+	unsigned int n_endpoints = 0;
+	unsigned int n_interfaces = 0;
+	unsigned int n_alternates = 0;
+
+	while ((desc = usb_desc_foreach(cd, desc))) {
+		if (desc->bDescriptorType == UDESC_ENDPOINT) {
+			if (desc->bLength < ed_size)
+				return (false);
+			if (last_iface < 0)
+				return (false);
+			++n_endpoints;
+			if (++endpoints_this_interface > 16)
+				return (false);
+			continue;
+		}
+		if (desc->bDescriptorType == UDESC_INTERFACE) {
+			if (desc->bLength < id_size)
+				return (false);
+			id = (void *)desc;
+			if (last_iface != id->bInterfaceNumber) {
+				last_iface = id->bInterfaceNumber;
+				++n_interfaces;
+			}
+			if (++n_alternates > 256)
+				return (false);
+			endpoints_this_interface = 0;
+			continue;
+		}
+	}
+	counts[0] = n_endpoints;
+	counts[1] = n_interfaces;
+	counts[2] = n_alternates;
+	return (true);
+}
+
 /*------------------------------------------------------------------------*
  *	usb_linux_create_usb_device
  *
@@ -892,112 +946,102 @@ static int
 usb_linux_create_usb_device(struct usb_device *udev, device_t dev)
 {
 	struct usb_config_descriptor *cd = usbd_get_config_descriptor(udev);
-	struct usb_descriptor *desc;
+	struct usb_descriptor *desc = NULL;
 	struct usb_interface_descriptor *id;
 	struct usb_endpoint_descriptor *ed;
 	struct _lkpi_usb_interface *p_ui = NULL;
 	struct usb_host_interface *p_uhi = NULL;
 	struct usb_host_endpoint *p_uhe = NULL;
 	usb_size_t size;
-	uint16_t niface_total;
-	uint16_t nedesc;
-	uint16_t iface_no_curr;
-	uint16_t iface_index;
-	uint8_t pass;
+	/* Last seen UDESC_INTERFACE bInterfaceNumber. */
+	int iface_no_curr = -1;
 	uint8_t iface_no;
+	/* Count of UDESC_INTERFACE descriptors seen. */
+	uint16_t iface_index = 0;
+	int alt_count = 0;
+	unsigned int counts[3]; /* endpoints, interface groups, interfaces */
+
+	if (!count_usb_children(cd, counts))
+		return (ENXIO);
+
+	size = (sizeof(*p_uhe) * counts[0]) +
+		(sizeof(*p_ui) * counts[1]) +
+		(sizeof(*p_uhi) * counts[2]);
+
+	p_uhe = malloc(size, M_USBDEV, M_WAITOK | M_ZERO);
+	if (p_uhe == NULL) /* only possible without M_WAITOK */
+		return (ENOMEM);
+	p_ui = (void *)(p_uhe + counts[0]);
+	p_uhi = (void *)(p_ui + counts[1]);
+
+	udev->linux_iface_start = p_ui;
+	udev->linux_iface_end = p_ui + counts[1];
+	udev->linux_endpoint_start = p_uhe;
+	udev->linux_endpoint_end = p_uhe + counts[0];
+	udev->devnum = device_get_unit(dev);
+	bcopy(&udev->ddesc, &udev->descriptor,
+	      sizeof(udev->descriptor));
+	bcopy(udev->ctrl_ep.edesc, &udev->ep0.desc,
+	      sizeof(udev->ep0.desc));
 
 	/*
-	 * We do two passes. One pass for computing necessary memory size
-	 * and one pass to initialize all the allocated memory structures.
+	 * Iterate over all the USB descriptors. Use the USB config
+	 * descriptor pointer provided by the FreeBSD USB stack.
+	 * Assume that usb_desc_foreach returns exactly the same
+	 * subobjects that count_usb_children found.
 	 */
-	for (pass = 0; pass < 2; pass++) {
-		iface_no_curr = 0xFFFF;
-		niface_total = 0;
-		iface_index = 0;
-		nedesc = 0;
-		desc = NULL;
-
-		/*
-		 * Iterate over all the USB descriptors. Use the USB config
-		 * descriptor pointer provided by the FreeBSD USB stack.
-		 */
-		while ((desc = usb_desc_foreach(cd, desc))) {
-			/*
-			 * Build up a tree according to the descriptors we
-			 * find:
-			 */
-			switch (desc->bDescriptorType) {
-			case UDESC_DEVICE:
-				break;
-
-			case UDESC_ENDPOINT:
-				ed = (void *)desc;
-				if ((ed->bLength < sizeof(*ed)) ||
-				    (iface_index == 0))
-					break;
-				if (p_uhe) {
-					bcopy(ed, &p_uhe->desc, sizeof(p_uhe->desc));
-					p_uhe->bsd_iface_index = iface_index - 1;
-					TAILQ_INIT(&p_uhe->bsd_urb_list);
-					p_uhe++;
-				}
-				if (p_uhi) {
-					(p_uhi - 1)->desc.bNumEndpoints++;
-				}
-				nedesc++;
-				break;
-
-			case UDESC_INTERFACE:
-				id = (void *)desc;
-				if (id->bLength < sizeof(*id))
-					break;
-				if (p_uhi) {
-					bcopy(id, &p_uhi->desc, sizeof(p_uhi->desc));
-					p_uhi->desc.bNumEndpoints = 0;
-					p_uhi->endpoint = p_uhe;
-					p_uhi->string = "";
-					p_uhi->bsd_iface_index = iface_index;
-					p_uhi++;
-				}
-				iface_no = id->bInterfaceNumber;
-				niface_total++;
-				if (iface_no_curr != iface_no) {
-					if (p_ui) {
-						lkpifill_usb_dev(dev, p_ui);
-						p_ui->altsetting = p_uhi - 1;
-						p_ui->cur_altsetting = p_uhi - 1;
-						p_ui->bsd_iface_index = iface_index;
-						p_ui->linux_udev = udev;
-						p_ui++;
-					}
-					iface_no_curr = iface_no;
-					iface_index++;
-				}
-				break;
-
-			default:
-				break;
+	while ((desc = usb_desc_foreach(cd, desc))) {
+#if 0
+		if (true) {
+			char tmp[28] = { '\0' };
+			unsigned char *raw = (unsigned char *)desc;
+			static char hex[16] = "0123456789ABCDEF";
+			int length = desc->bLength;
+			if (length > 9) length = 9;
+			int si;
+			for (si = 0; si < length; ++si) {
+				tmp[3 * si + 0] = hex[15 & (raw[si] >> 4)];
+				tmp[3 * si + 1] = hex[15 & raw[si]];
+				tmp[3 * si + 2] = ' ';
 			}
+			device_printf(dev, "create_usb_device %s\n", tmp);
 		}
+#endif
+		/* Build up a tree according to the descriptors we find: */
+		if (desc->bDescriptorType == UDESC_ENDPOINT) {
+			ed = (void *)desc;
+			if (iface_index <= 0)
+				panic("usb_desc_foreach changed");
+			bcopy(ed, &p_uhe->desc, sizeof(p_uhe->desc));
+			p_uhe->bsd_iface_index = iface_index - 1;
+			TAILQ_INIT(&p_uhe->bsd_urb_list);
+			p_uhe++;
+			(p_uhi - 1)->desc.bNumEndpoints++;
+			continue;
+		}
+		if (desc->bDescriptorType == UDESC_INTERFACE) {
+			id = (void *)desc;
+			bcopy(id, &p_uhi->desc, sizeof(p_uhi->desc));
+			p_uhi->desc.bNumEndpoints = 0;
+			p_uhi->endpoint = p_uhe;
+			p_uhi->string = "";
+			p_uhi->bsd_iface_index = iface_index;
 
-		if (pass == 0) {
-			size = (sizeof(*p_uhe) * nedesc) +
-			    (sizeof(*p_ui) * iface_index) +
-			    (sizeof(*p_uhi) * niface_total);
-
-			p_uhe = malloc(size, M_USBDEV, M_WAITOK | M_ZERO);
-			p_ui = (void *)(p_uhe + nedesc);
-			p_uhi = (void *)(p_ui + iface_index);
-
-			udev->linux_iface_start = p_ui;
-			udev->linux_iface_end = p_ui + iface_index;
-			udev->linux_endpoint_start = p_uhe;
-			udev->linux_endpoint_end = p_uhe + nedesc;
-			udev->devnum = device_get_unit(dev);
-			bcopy(&udev->ddesc, &udev->descriptor,
-			    sizeof(udev->descriptor));
-			bcopy(udev->ctrl_ep.edesc, &udev->ep0.desc,
-			    sizeof(udev->ep0.desc));
+			iface_no = id->bInterfaceNumber;
+			alt_count++;
+			if (iface_no_curr != iface_no) {
+				lkpifill_usb_dev(dev, p_ui);
+				p_ui->num_altsetting = alt_count;
+				p_ui->altsetting = p_uhi;
+				p_ui->cur_altsetting = p_uhi;
+				p_ui->bsd_iface_index = iface_index;
+				p_ui->linux_udev = udev;
+				p_ui++;
+				alt_count = 0;
+			}
+			iface_no_curr = iface_no;
+			p_uhi++;
+			iface_index++;
 		}
 	}
 	return (0);
@@ -1168,7 +1212,7 @@ usb_get_intfdata(struct _lkpi_usb_interface *intf)
  * function is not part of the Linux USB API, and is for internal use
  * only.
  *------------------------------------------------------------------------*/
-void
+int
 usb_linux_register(void *arg)
 {
 	struct usb_driver *drv = arg;
@@ -1178,6 +1222,8 @@ usb_linux_register(void *arg)
 	mtx_unlock(&Giant);
 
 	usb_needs_explore_all();
+
+	return 0;
 }
 
 /*------------------------------------------------------------------------*
@@ -1793,6 +1839,11 @@ usb_endpoint_xfer_isoc(struct usb_endpoint_descriptor *endpoint)
 	return (endpoint->bmAttributes & UE_XFERTYPE) == UE_ISOCHRONOUS;
 }
 
+int usb_reset_device(struct usb_device *dev)
+{
+	device_printf(dev->parent_dev, "usb_reset_device not implemented");
+	return (0);
+}
 
 /* URB Anchors.  Caller responsible for locks. */
 void

@@ -103,6 +103,7 @@ struct device {
 	struct device	*parent;
 	struct list_head irqents;
 	device_t	bsddev;
+	dev_t		devt;
 	/*
 	 * The following flag is used to determine if the LinuxKPI is
 	 * responsible for detaching the BSD device or not. If the
@@ -113,7 +114,6 @@ struct device {
 	bool		bsddev_attached_here;
 	struct device_driver *driver;
 	struct device_type *type;
-	dev_t		devt;
 	struct class	*class;
 	void		(*release)(struct device *dev);
 	struct kobject	kobj;
