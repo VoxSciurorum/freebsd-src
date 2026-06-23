@@ -1,0 +1,7 @@
+include MINIMAL
+device usb
+device xhci
+device hid
+device hidbus
+device usbhid
+device hkbd
