@@ -7,6 +7,10 @@
 
 #include "txrx.h"
 
+#ifdef __FreeBSD__
+#include <dev/usb/usb_device.h>
+#endif
+
 #define RTW89_USB_VENQT			0x05
 #define RTW89_USB_VENQT_READ		0xc0
 #define RTW89_USB_VENQT_WRITE		0x40
