@@ -235,6 +235,32 @@ static int dma_mapping_to_ep(enum rtw_dma_mapping dma_mapping)
 	}
 }
 
+#ifdef __FreeBSD__
+static int setup_bsd(struct usb_device *dev,
+		     struct usb_host_interface *host_interface,
+		     uint8_t num)
+{
+	int error;
+	struct usb_host_endpoint *endpoint;
+
+	for (int i = 0; i < host_interface->desc.bNumEndpoints; ++i) {
+		endpoint = &host_interface->endpoint[i];
+		if (usb_endpoint_num(&endpoint->desc) == num) {
+			// XXX What should bufsize be?
+			error = usb_setup_endpoint(dev, endpoint, 4096);
+			if (error != 0)
+				device_printf(dev->parent_dev,
+					      "usb_setup_endpoint returned %d\n",
+					      error);
+			return error;
+		}
+	}
+
+	device_printf(dev->parent_dev, "endpoint %d not found\n", num);
+	return -EINVAL;
+}
+#endif
+
 static int rtw_usb_parse(struct rtw_dev *rtwdev,
 			 struct usb_interface *interface)
 {
@@ -243,7 +269,7 @@ static int rtw_usb_parse(struct rtw_dev *rtwdev,
 	struct usb_interface_descriptor *interface_desc = &host_interface->desc;
 	struct usb_endpoint_descriptor *endpoint;
 	int num_out_pipes = 0;
-	int i;
+	int i, error;
 	u8 num;
 	const struct rtw_chip_info *chip = rtwdev->chip;
 	const struct rtw_rqpn *rqpn;
@@ -289,6 +315,18 @@ static int rtw_usb_parse(struct rtw_dev *rtwdev,
 		rtw_err(rtwdev, "invalid number of endpoints %d\n", num_out_pipes);
 		return -EINVAL;
 	}
+
+#ifdef __FreeBSD__
+	error = setup_bsd(rtwusb->udev, host_interface, rtwusb->pipe_in);
+	if (error != 0)
+		return error;
+	for (i = 0; i < num_out_pipes; ++i) {
+		error = setup_bsd(rtwusb->udev, host_interface,
+				  rtwusb->out_ep[i]);
+		if (error != 0)
+			return error;
+	}
+#endif
 
 	rqpn = &chip->rqpn_table[num_out_pipes];
 
@@ -368,17 +406,19 @@ static int rtw_usb_write_port(struct rtw_dev *rtwdev, u8 qsel, struct sk_buff *s
 	struct rtw_usb *rtwusb = rtw_get_usb_priv(rtwdev);
 	struct usb_device *usbd = rtwusb->udev;
 	struct urb *urb;
-	unsigned int pipe;
+	usb_host_endpoint_t pipe;
 	int ret;
 	int ep = qsel_to_ep(rtwusb, qsel);
 
-	if (ep < 0)
+	if (ep < 0) {
 		return ep;
+        }
 
 	pipe = usb_sndbulkpipe(usbd, rtwusb->out_ep[ep]);
 	urb = usb_alloc_urb(0, GFP_ATOMIC);
-	if (!urb)
+	if (!urb) {
 		return -ENOMEM;
+	}
 
 	usb_fill_bulk_urb(urb, usbd, pipe, skb->data, skb->len, cb, context);
 	urb->transfer_flags |= URB_ZERO_PACKET;
@@ -701,6 +741,12 @@ static void rtw_usb_rx_resubmit(struct rtw_usb *rtwusb,
 			  rxcb->rx_skb->data, RTW_USB_MAX_RECVBUF_SZ,
 			  rtw_usb_read_port_complete, rxcb);
 
+	if (rxcb->rx_urb->endpoint == NULL) {
+		device_printf(rtwusb->udev->parent_dev,
+			      "RX urb %p has null endpoint\n",
+			      rxcb->rx_urb);
+	}
+
 	error = usb_submit_urb(rxcb->rx_urb, gfp);
 	if (error) {
 		skb_queue_tail(&rtwusb->rx_free_queue, rxcb->rx_skb);
@@ -846,7 +892,7 @@ static void rtw_usb_link_ps(struct rtw_dev *rtwdev, bool enter)
 static void rtw_usb_init_burst_pkt_len(struct rtw_dev *rtwdev)
 {
 	struct rtw_usb *rtwusb = rtw_get_usb_priv(rtwdev);
-	enum usb_device_speed speed = rtwusb->udev->speed;
+	usb_device_speed_t speed = rtwusb->udev->speed;
 	u8 rxdma, burst_size;
 
 	rxdma = BIT_DMA_BURST_CNT | BIT_DMA_MODE;
@@ -1075,7 +1121,7 @@ static void rtw_usb_intf_deinit(struct rtw_dev *rtwdev,
 static int rtw_usb_switch_mode_old(struct rtw_dev *rtwdev)
 {
 	struct rtw_usb *rtwusb = rtw_get_usb_priv(rtwdev);
-	enum usb_device_speed cur_speed = rtwusb->udev->speed;
+	usb_device_speed_t cur_speed = rtwusb->udev->speed;
 	u8 hci_opt;
 
 	if (cur_speed == USB_SPEED_HIGH) {
@@ -1100,7 +1146,7 @@ static int rtw_usb_switch_mode_old(struct rtw_dev *rtwdev)
 
 static int rtw_usb_switch_mode_new(struct rtw_dev *rtwdev)
 {
-	enum usb_device_speed cur_speed;
+	usb_device_speed_t cur_speed;
 	u8 id = rtwdev->chip->id;
 	bool can_switch;
 	u32 pad_ctrl2;
@@ -1189,7 +1235,7 @@ static int rtw_usb_switch_mode(struct rtw_dev *rtwdev)
 #define USB_PHY_PAGE1	0xbb
 
 static void rtw_usb_phy_write(struct rtw_dev *rtwdev, u8 addr, u16 data,
-			      enum usb_device_speed speed)
+			      usb_device_speed_t speed)
 {
 	if (speed == USB_SPEED_SUPER) {
 		rtw_write8(rtwdev, REG_USB3_PHY_DAT_L, data & 0xff);
@@ -1203,7 +1249,7 @@ static void rtw_usb_phy_write(struct rtw_dev *rtwdev, u8 addr, u16 data,
 }
 
 static void rtw_usb_page_switch(struct rtw_dev *rtwdev,
-				enum usb_device_speed speed, u8 page)
+				usb_device_speed_t speed, u8 page)
 {
 	if (speed == USB_SPEED_SUPER)
 		return;
@@ -1212,7 +1258,7 @@ static void rtw_usb_page_switch(struct rtw_dev *rtwdev,
 }
 
 static void rtw_usb_phy_cfg(struct rtw_dev *rtwdev,
-			    enum usb_device_speed speed)
+			    usb_device_speed_t speed)
 {
 	const struct rtw_intf_phy_para *para = NULL;
 	u16 offset;
@@ -1282,7 +1328,8 @@ int rtw_usb_probe(struct usb_interface *intf, const struct usb_device_id *id)
 
 	ret = rtw_usb_intf_init(rtwdev, intf);
 	if (ret) {
-		rtw_err(rtwdev, "failed to init USB interface\n");
+		rtw_err(rtwdev, "failed to init USB interface (%d)\n",
+			ret);
 		goto err_deinit_core;
 	}
 
@@ -1380,5 +1427,5 @@ MODULE_AUTHOR("Realtek Corporation");
 MODULE_DESCRIPTION("Realtek USB 802.11ac wireless driver");
 MODULE_LICENSE("Dual BSD/GPL");
 #if defined(__FreeBSD__)
-MODULE_DEPEND(rtw88, linuxkpi_usb, 1, 1, 1);
+MODULE_DEPEND(rtw88, linuxkpi, 1, 1, 1);
 #endif
