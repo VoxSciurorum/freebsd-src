@@ -28,9 +28,6 @@ static struct usb_driver rtw_8723du_driver = {
 	.id_table = rtw_8723du_id_table,
 	.probe = rtw8723du_probe,
 	.disconnect = rtw_usb_disconnect,
-#if defined(__FreeBSD__)
-	.bsddriver.name = KBUILD_MODNAME,
-#endif
 };
 module_usb_driver(rtw_8723du_driver);
 

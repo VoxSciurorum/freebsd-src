@@ -54,9 +54,6 @@ static struct usb_driver rtw_8821cu_driver = {
 	.id_table = rtw_8821cu_id_table,
 	.probe = rtw_8821cu_probe,
 	.disconnect = rtw_usb_disconnect,
-#if defined(__FreeBSD__)
-	.bsddriver.name = KBUILD_MODNAME,
-#endif
 };
 module_usb_driver(rtw_8821cu_driver);
 
