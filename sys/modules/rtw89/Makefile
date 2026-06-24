@@ -7,7 +7,7 @@ DEVRTW89DIR=	${SRCTOP}/sys/contrib/dev/rtw89
 # Bus attachments.
 RTW89_PCI=		1
 RTW89_SDIO=		0
-RTW89_USB=		0
+RTW89_USB=		1
 
 # Options.
 RTW89_CONFIG_PM=	0
