@@ -28,6 +28,12 @@ usb_search_packages()
 	oldifs=$IFS
 	IFS=$'\n'
 	for fulldevice in $(usbconfig -l dump_device_desc); do
+		case "${fulldevice}" in
+		"No device match or lack of permissions.")
+			echo "USB devices not readable; run as root to check USB firmware" >&2
+			continue
+			;;
+		esac
 		vendor=$(usb_get_vendor "${fulldevice}")
 		if [ -z "${vendor}" ]; then
 			continue
