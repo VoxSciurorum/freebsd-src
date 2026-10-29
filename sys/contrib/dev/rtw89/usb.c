@@ -9,16 +9,6 @@
 #include "txrx.h"
 #include "usb.h"
 
-#ifdef __FreeBSD__
-typedef enum usb_dev_speed usb_device_speed_t;
-typedef struct usb_host_endpoint *usb_host_endpoint_t;
-#elif defined __linux__
-typedef enum usb_device_speed usb_device_speed_t;
-typedef int usb_host_endpoint_t;
-#else
-#error unknown OS
-#endif
-
 static void rtw89_usb_read_port_complete(struct urb *urb);
 
 static void rtw89_usb_vendorreq(struct rtw89_dev *rtwdev, u32 addr,
