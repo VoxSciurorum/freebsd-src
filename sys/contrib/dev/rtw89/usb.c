@@ -16,7 +16,7 @@ static void rtw89_usb_vendorreq(struct rtw89_dev *rtwdev, u32 addr,
 {
 	struct rtw89_usb *rtwusb = rtw89_usb_priv(rtwdev);
 	struct usb_device *udev = rtwusb->udev;
-	unsigned int pipe;
+	usb_host_endpoint_t pipe;
 	u16 value, index;
 	int attempt, ret;
 
@@ -240,7 +240,7 @@ static int rtw89_usb_write_port(struct rtw89_dev *rtwdev, u8 ch_dma,
 	struct usb_device *usbd = rtwusb->udev;
 	struct urb *urb;
 	u8 bulkout_id = info->bulkout_id[ch_dma];
-	unsigned int pipe;
+	usb_host_endpoint_t pipe;
 	int ret;
 
 	if (test_bit(RTW89_FLAG_UNPLUGGED, rtwdev->flags))
@@ -749,7 +749,7 @@ static int rtw89_usb_ops_mac_post_init(struct rtw89_dev *rtwdev)
 {
 	struct rtw89_usb *rtwusb = rtw89_usb_priv(rtwdev);
 	const struct rtw89_usb_info *info = rtwusb->info;
-	enum usb_device_speed speed;
+	usb_device_speed_t speed;
 	u32 ep;
 
 	rtw89_write32_clr(rtwdev, info->usb3_mac_npi_config_intf_0,
@@ -909,6 +909,24 @@ static int rtw89_usb_parse(struct rtw89_dev *rtwdev,
 
 			rtwusb->out_pipe[num_out_pipes++] = num;
 		}
+
+#ifdef __FreeBSD__
+		/* Large enough that URBs are not split. */
+		if (usb_endpoint_xfer_bulk(endpoint)) {
+			int error;
+
+			error = usb_setup_endpoint(interface_to_usbdev(intf),
+						   &host_interface->endpoint[i],
+						   usb_endpoint_dir_in(endpoint) ?
+						   RTW89_USB_RECVBUF_SZ :
+						   RTW89_USB_XMITBUF_SZ);
+			if (error != 0) {
+				rtw89_err(rtwdev, "usb_setup_endpoint %#x failed: %d\n",
+					  endpoint->bEndpointAddress, error);
+				return error;
+			}
+		}
+#endif
 	}
 
 	if (num_out_pipes < 1) {
@@ -1069,5 +1087,5 @@ MODULE_AUTHOR("Bitterblue Smith <rtl8821cerfe2@gmail.com>");
 MODULE_DESCRIPTION("Realtek USB 802.11ax wireless driver");
 MODULE_LICENSE("Dual BSD/GPL");
 #if defined(__FreeBSD__)
-MODULE_DEPEND(rtw89, linuxkpi_usb, 1, 1, 1);
+MODULE_DEPEND(rtw89, linuxkpi, 1, 1, 1);
 #endif
