@@ -247,7 +247,7 @@ static int rtw_usb_parse(struct rtw_dev *rtwdev,
 	struct usb_interface_descriptor *interface_desc = &host_interface->desc;
 	struct usb_endpoint_descriptor *endpoint;
 	int num_out_pipes = 0;
-	int i, error;
+	int i;
 	u8 num;
 	const struct rtw_chip_info *chip = rtwdev->chip;
 	const struct rtw_rqpn *rqpn;
@@ -289,6 +289,8 @@ static int rtw_usb_parse(struct rtw_dev *rtwdev,
 #ifdef __FreeBSD__
 		/* Large enough that URBs are not split. */
 		if (usb_endpoint_xfer_bulk(endpoint)) {
+			int error;
+
 			error = usb_setup_endpoint(rtwusb->udev,
 						   &host_interface->endpoint[i],
 						   usb_endpoint_dir_in(endpoint) ?
