@@ -7,7 +7,7 @@ DEVRTW88DIR=	${SRCTOP}/sys/contrib/dev/rtw88
 # Bus attachments.
 RTW88_PCI=		1
 RTW88_SDIO=		0
-RTW88_USB=		0
+RTW88_USB=		1
 
 # Options.
 RTW88_CONFIG_PM=	0
