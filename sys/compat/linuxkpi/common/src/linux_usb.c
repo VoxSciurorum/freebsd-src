@@ -310,8 +310,17 @@ usb_linux_attach(device_t dev)
 	}
 	if (udrv->probe) {
 		if ((udrv->probe) (sc->sc_ui, id)) {
+			/*
+			 * Linux leaves stopping URBs to the driver here,
+			 * but FreeBSD frees the transfers below, which
+			 * would strand URBs still queued on an endpoint.
+			 * Give them back as detach does.
+			 */
+			usb_linux_disable_interface(sc->sc_fbsd_udev,
+			    sc->sc_ui);
 			usb_linux_cleanup_interface(sc->sc_fbsd_udev,
 			    sc->sc_ui);
+			usb_set_intfdata(sc->sc_ui, NULL);
 			put_device(&sc->sc_ui->dev);
 			sc->sc_ui = NULL;
 			return (ENXIO);
