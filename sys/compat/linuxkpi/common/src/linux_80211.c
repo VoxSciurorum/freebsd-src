@@ -5110,6 +5110,13 @@ lkpi_ic_scan_start(struct ieee80211com *ic)
 		}
 
 		lvif = VAP_TO_LVIF(vap);
+		/*
+		 * Remember the requested scan flags (e.g. NOJOIN from
+		 * wpa_supplicant) in case we have to fall back to a sw scan.
+		 */
+		lvif->sw_scan_flags = ss->ss_flags & (IEEE80211_SCAN_NOPICK |
+		    IEEE80211_SCAN_ACTIVE | IEEE80211_SCAN_PICK1ST |
+		    IEEE80211_SCAN_NOBCAST | IEEE80211_SCAN_NOJOIN);
 
 		hw_req = malloc(sizeof(*hw_req) + ssids_len +
 		    s6ghzlen + chan_len + lhw->supbands * lhw->scan_ie_len +
@@ -5381,7 +5388,7 @@ lkpi_sw_scan_task(void *arg, int pending __unused)
 	 * unless other scans started in between.
 	 */
 	ieee80211_start_scan(vap,
-	    IEEE80211_SCAN_ONCE,
+	    IEEE80211_SCAN_ONCE | lvif->sw_scan_flags,
 	    msecs_to_ticks(10000), /* 10000 ms (=~ 50 chan * 200 ms) */
 	    ss->ss_mindwell ? ss->ss_mindwell : msecs_to_ticks(20),
 	    ss->ss_maxdwell ? ss->ss_maxdwell : msecs_to_ticks(200),
