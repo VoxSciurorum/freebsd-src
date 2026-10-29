@@ -29,6 +29,15 @@ int rtw_enter_ips(struct rtw_dev *rtwdev)
 	if (!test_bit(RTW_FLAG_POWERON, rtwdev->flags))
 		return 0;
 
+#ifdef __FreeBSD__
+	/*
+	 * Leaving IPS stalls the USB bulk OUT endpoint.
+	 * XXX The right fix is probably elsewhere.
+	 */
+	if (rtw_usb_skip_ips && rtw_hci_type(rtwdev) == RTW_HCI_TYPE_USB)
+		return 0;
+#endif
+
 	rtw_coex_ips_notify(rtwdev, COEX_IPS_ENTER);
 
 	rtw_core_stop(rtwdev);

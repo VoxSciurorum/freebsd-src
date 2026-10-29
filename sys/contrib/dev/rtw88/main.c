@@ -55,6 +55,11 @@ MODULE_PARM_DESC(support_ht, "Set to Y to enable HT support");
 static bool rtw_vht_support = false;
 module_param_named(support_vht, rtw_vht_support, bool, 0644);
 MODULE_PARM_DESC(support_vht, "Set to Y to enable VHT support");
+
+/* Leaving IPS can stall the USB bulk OUT endpoint. */
+bool rtw_usb_skip_ips = true;
+module_param_named(usb_skip_ips, rtw_usb_skip_ips, bool, 0644);
+MODULE_PARM_DESC(usb_skip_ips, "Set to N to let USB devices enter IPS");
 #endif
 
 #if defined(__FreeBSD__)

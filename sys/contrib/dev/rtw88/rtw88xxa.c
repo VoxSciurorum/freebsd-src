@@ -701,7 +701,7 @@ void rtw88xxa_power_off(struct rtw_dev *rtwdev,
 			const struct rtw_pwr_seq_cmd *const *enter_lps_flow)
 {
 	struct rtw_usb *rtwusb = rtw_get_usb_priv(rtwdev);
-	enum usb_device_speed speed = rtwusb->udev->speed;
+	usb_device_speed_t speed = rtwusb->udev->speed;
 	u16 ori_fsmc0;
 	u8 reg_cr;
 
