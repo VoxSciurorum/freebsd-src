@@ -36,10 +36,11 @@
 #include <dev/usb/usbdi.h>
 #include <dev/usb/usbdi_util.h>
 
+#include <linux/device.h>
 #include <linux/pm.h>
 
 struct usb_device;
-struct usb_interface;
+struct _lkpi_usb_interface;
 struct usb_driver;
 struct urb;
 
@@ -50,10 +51,55 @@ typedef void (usb_complete_t)(struct urb *);
 
 #define	USB_DEVICE_ID_MATCH_DEVICE \
 	(USB_DEVICE_ID_MATCH_VENDOR | USB_DEVICE_ID_MATCH_PRODUCT)
+#define	USB_DEVICE_ID_MATCH_INT_INFO \
+	(USB_DEVICE_ID_MATCH_INT_CLASS | USB_DEVICE_ID_MATCH_INT_SUBCLASS | \
+	USB_DEVICE_ID_MATCH_INT_PROTOCOL)
 
-#define	USB_DEVICE(vend,prod) \
-	.match_flags = USB_DEVICE_ID_MATCH_DEVICE, .idVendor = (vend), \
-	.idProduct = (prod)
+/*
+ * usb_linux_lookup_id() matches on match_flags.  devmatch(8) reads the
+ * FreeBSD match_flag_* bitfields instead (the "M16:mask" of
+ * USB_STD_PNP_INFO), so set both.  The bits are in the same order.
+ */
+#define	USB_DEVICE(vend, prod) \
+	.match_flags = USB_DEVICE_ID_MATCH_DEVICE, \
+	.match_flag_vendor = 1, .match_flag_product = 1, \
+	.idVendor = (vend), .idProduct = (prod)
+
+/* Match vendor and product, and interface (not device) class fields. */
+#define	USB_DEVICE_AND_INTERFACE_INFO(vend, prod, cl, sc, pr) \
+	.match_flags = USB_DEVICE_ID_MATCH_DEVICE | \
+	    USB_DEVICE_ID_MATCH_INT_INFO, \
+	.match_flag_vendor = 1, .match_flag_product = 1, \
+	.match_flag_int_class = 1, .match_flag_int_subclass = 1, \
+	.match_flag_int_protocol = 1, \
+	.idVendor = (vend), .idProduct = (prod), \
+	.bInterfaceClass = (cl), .bInterfaceSubClass = (sc), \
+	.bInterfaceProtocol = (pr)
+
+/*
+ * Host mode only.  Linux tables end with an empty entry, which has no
+ * mask bits and so would match every USB device -> nitems() - 1.
+ */
+#define	MODULE_DEVICE_TABLE_BUS_usb(_bus, _table)			\
+	MODULE_PNP_INFO(USB_STD_PNP_HOST_INFO, uhub, lkpi_ ## _table,	\
+	    _table, nitems(_table) - 1)
+
+#define	module_usb_driver(_drv)						\
+	module_driver(_drv, usb_linux_register, usb_linux_deregister)
+
+struct _lkpi_usb_interface {
+	struct device dev;
+	/* Total number of alternate settings, from 1 to 256 */
+	uint16_t num_altsetting;
+	uint8_t	bsd_iface_index;
+	struct usb_host_interface *altsetting;
+	struct usb_host_interface *cur_altsetting;
+	struct usb_device *linux_udev;
+	void   *bsd_priv_sc;		/* device specific information */
+};
+
+#undef usb_interface
+#define	usb_interface _lkpi_usb_interface
 
 /* The "usb_driver" structure holds the Linux USB device driver
  * callbacks, and a pointer to device ID's which this entry should
@@ -64,19 +110,27 @@ typedef void (usb_complete_t)(struct urb *);
 struct usb_driver {
 	const char *name;
 
-	int (*probe)(struct usb_interface *intf,
+	int (*probe)(struct _lkpi_usb_interface *intf,
 	    const struct usb_device_id *id);
 
-	void (*disconnect)(struct usb_interface *intf);
+	void (*disconnect)(struct _lkpi_usb_interface *intf);
 
-	int (*ioctl)(struct usb_interface *intf, unsigned int code, void *buf);
+	int (*ioctl)(struct _lkpi_usb_interface *intf,
+	    unsigned int code, void *buf);
 
-	int (*suspend)(struct usb_interface *intf, pm_message_t message);
-	int (*resume)(struct usb_interface *intf);
+	int (*suspend)(struct _lkpi_usb_interface *intf, pm_message_t message);
+	int (*resume)(struct _lkpi_usb_interface *intf);
 
 	const struct usb_device_id *id_table;
 
-	void (*shutdown)(struct usb_interface *intf);
+	void (*shutdown)(struct _lkpi_usb_interface *intf);
+
+	/* Accepted for compatibility; LinuxKPI ignores them. */
+	bool supports_autosuspend;
+	bool disable_hub_initiated_lpm;
+
+	driver_t   bsddriver;
+	devclass_t bsdclass;
 
 	LIST_ENTRY(usb_driver) linux_driver_list;
 };
@@ -228,6 +282,10 @@ struct usb_iso_packet_descriptor {
 	 int16_t status;		/* transfer status */
 };
 
+struct usb_anchor {
+	TAILQ_HEAD(usb_anchor_head, urb) urbs;	/* protected by Giant */
+};
+
 /*
  * The following structure holds various information about an USB
  * transfer. This structure is used for all kinds of USB transfers.
@@ -236,6 +294,7 @@ struct usb_iso_packet_descriptor {
  */
 struct urb {
 	TAILQ_ENTRY(urb) bsd_urb_list;
+	TAILQ_ENTRY(urb) bsd_anchor_list;
 	struct cv cv_wait;
 
 	struct usb_device *dev;		/* (in) pointer to associated device */
@@ -272,6 +331,10 @@ struct urb {
 	uint8_t	bsd_isread;
 	uint8_t kill_count;		/* FreeBSD specific */
 
+	uint8_t ref_count;		/* Add 1 to get real count; Giant */
+
+	struct usb_anchor *anchor;
+
 	struct usb_iso_packet_descriptor iso_frame_desc[];	/* (in) ISO ONLY */
 };
 
@@ -288,23 +351,39 @@ int	usb_set_interface(struct usb_device *dev, uint8_t ifnum,
 int	usb_setup_endpoint(struct usb_device *dev,
 	    struct usb_host_endpoint *uhe, usb_frlength_t bufsize);
 
+int	usb_endpoint_num(struct usb_endpoint_descriptor *endpoint);
+int	usb_endpoint_dir_in(struct usb_endpoint_descriptor *endpoint);
+int	usb_endpoint_dir_out(struct usb_endpoint_descriptor *endpoint);
+int	usb_endpoint_xfer_bulk(struct usb_endpoint_descriptor *endpoint);
+int	usb_endpoint_xfer_control(struct usb_endpoint_descriptor *endpoint);
+int	usb_endpoint_xfer_int(struct usb_endpoint_descriptor *endpoint);
+int	usb_endpoint_xfer_isoc(struct usb_endpoint_descriptor *endpoint);
+int	usb_endpoint_maxp(struct usb_endpoint_descriptor *endpoint);
+
+void	usb_anchor_urb(struct urb *urb, struct usb_anchor *anchor);
+void	usb_unanchor_urb(struct urb *urb);
+void	usb_kill_anchored_urbs(struct usb_anchor *anchor);
+void	init_usb_anchor(struct usb_anchor *anchor);
+int	usb_reset_device(struct usb_device *dev);
+
 struct usb_host_endpoint *usb_find_host_endpoint(struct usb_device *dev,
 	    uint8_t type, uint8_t ep);
 struct urb *usb_alloc_urb(uint16_t iso_packets, uint16_t mem_flags);
 struct usb_host_interface *usb_altnum_to_altsetting(
-	    const struct usb_interface *intf, uint8_t alt_index);
-struct usb_interface *usb_ifnum_to_if(struct usb_device *dev, uint8_t iface_no);
+	    const struct _lkpi_usb_interface *intf, uint8_t alt_index);
+struct _lkpi_usb_interface *usb_ifnum_to_if(struct usb_device *dev,
+	    uint8_t iface_no);
 
 void   *usb_buffer_alloc(struct usb_device *dev, usb_size_t size,
 	    uint16_t mem_flags, uint8_t *dma_addr);
-void   *usbd_get_intfdata(struct usb_interface *intf);
 
 void	usb_buffer_free(struct usb_device *dev, usb_size_t size, void *addr, uint8_t dma_addr);
 void	usb_free_urb(struct urb *urb);
 void	usb_init_urb(struct urb *urb);
 void	usb_kill_urb(struct urb *urb);
-void	usb_set_intfdata(struct usb_interface *intf, void *data);
-void	usb_linux_register(void *arg);
+void   *usb_get_intfdata(struct _lkpi_usb_interface *intf);
+void	usb_set_intfdata(struct _lkpi_usb_interface *intf, void *data);
+int	usb_linux_register(void *arg);
 void	usb_linux_deregister(void *arg);
 
 void	usb_fill_bulk_urb(struct urb *, struct usb_device *,
@@ -314,5 +393,19 @@ int	usb_bulk_msg(struct usb_device *, struct usb_host_endpoint *,
 
 #define	interface_to_usbdev(intf) (intf)->linux_udev
 #define	interface_to_bsddev(intf) (intf)->linux_udev
+
+/* Reference count manipulation. */
+static inline struct usb_device *
+usb_get_dev(struct usb_device *udev)
+{
+	return (udev);
+}
+
+static inline void
+usb_put_dev(struct usb_device *udev __unused)
+{
+}
+
+#define	USB_STATE_NOTATTACHED USB_STATE_DETACHED
 
 #endif					/* _USB_COMPAT_LINUX_H */

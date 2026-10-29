@@ -53,6 +53,16 @@
 #define	USB_DEBUG_VAR usb_debug
 
 #include <dev/usb/usb_core.h>
+
+/*
+ * Declare the list heads before <linux/usb.h>, whose <linux/list.h>
+ * replaces LIST_HEAD with the Linux definition.
+ */
+struct usb_driver;
+struct usb_linux_softc;
+LIST_HEAD(usb_linux_driver_head, usb_driver);
+LIST_HEAD(usb_linux_softc_head, usb_linux_softc);
+
 #include <linux/usb.h>
 #include <dev/usb/usb_process.h>
 #include <dev/usb/usb_device.h>
@@ -70,7 +80,7 @@ struct usb_linux_softc {
 
 	device_t sc_fbsd_dev;
 	struct usb_device *sc_fbsd_udev;
-	struct usb_interface *sc_ui;
+	struct _lkpi_usb_interface *sc_ui;
 	struct usb_driver *sc_udrv;
 };
 
@@ -87,13 +97,22 @@ static usb_callback_t usb_linux_non_isoc_callback;
 static usb_complete_t usb_linux_wait_complete;
 
 static uint16_t	usb_max_isoc_frames(struct usb_device *);
+
+SYSCTL_DECL(_compat_linuxkpi);
+static bool lkpi_usb_reset_device = true;
+SYSCTL_BOOL(_compat_linuxkpi, OID_AUTO, usb_reset_device, CTLFLAG_RWTUN,
+    &lkpi_usb_reset_device, 0,
+    "Let usb_reset_device() reset the USB port (else it does nothing)");
 static int	usb_start_wait_urb(struct urb *, usb_timeout_t, uint16_t *);
 static const struct usb_device_id *usb_linux_lookup_id(
 		    const struct usb_device_id *, struct usb_attach_arg *);
 static struct	usb_driver *usb_linux_get_usb_driver(struct usb_linux_softc *);
 static int	usb_linux_create_usb_device(struct usb_device *, device_t);
+static int	lkpifill_usb_dev(device_t, struct _lkpi_usb_interface *);
 static void	usb_linux_cleanup_interface(struct usb_device *,
-		    struct usb_interface *);
+		    struct _lkpi_usb_interface *);
+static void	usb_linux_disable_interface(struct usb_device *,
+		    struct _lkpi_usb_interface *);
 static void	usb_linux_complete(struct usb_xfer *);
 static int	usb_unlink_urb_sub(struct urb *, uint8_t);
 
@@ -101,8 +120,8 @@ static int	usb_unlink_urb_sub(struct urb *, uint8_t);
  * FreeBSD USB interface
  *------------------------------------------------------------------------*/
 
-static LIST_HEAD(, usb_linux_softc) usb_linux_attached_list;
-static LIST_HEAD(, usb_driver) usb_linux_driver_list;
+static struct usb_linux_softc_head usb_linux_attached_list;
+static struct usb_linux_driver_head usb_linux_driver_list;
 
 static device_method_t usb_linux_methods[] = {
 	/* Device interface */
@@ -259,6 +278,7 @@ usb_linux_attach(device_t dev)
 	struct usb_linux_softc *sc = device_get_softc(dev);
 	struct usb_driver *udrv;
 	const struct usb_device_id *id = NULL;
+	int error = 0;
 
 	mtx_lock(&Giant);
 	LIST_FOREACH(udrv, &usb_linux_driver_list, linux_driver_list) {
@@ -271,8 +291,9 @@ usb_linux_attach(device_t dev)
 	if (id == NULL) {
 		return (ENXIO);
 	}
-	if (usb_linux_create_usb_device(uaa->device, dev) != 0)
-		return (ENOMEM);
+	error = usb_linux_create_usb_device(uaa->device, dev);
+	if (error != 0)
+		return (error);
 	device_set_usb_desc(dev);
 
 	sc->sc_fbsd_udev = uaa->device;
@@ -282,8 +303,17 @@ usb_linux_attach(device_t dev)
 	if (sc->sc_ui == NULL) {
 		return (EINVAL);
 	}
+	error = lkpifill_usb_dev(dev, sc->sc_ui);
+	if (error != 0) {
+		sc->sc_ui = NULL;
+		return (error);
+	}
 	if (udrv->probe) {
 		if ((udrv->probe) (sc->sc_ui, id)) {
+			usb_linux_cleanup_interface(sc->sc_fbsd_udev,
+			    sc->sc_ui);
+			put_device(&sc->sc_ui->dev);
+			sc->sc_ui = NULL;
 			return (ENXIO);
 		}
 	}
@@ -316,6 +346,14 @@ usb_linux_detach(device_t dev)
 	}
 	mtx_unlock(&Giant);
 
+	/*
+	 * As Linux usb_unbind_interface() does for drivers without
+	 * soft_unbind: stop all URBs of the interface before calling
+	 * disconnect, so no completion runs after the driver freed its
+	 * state.
+	 */
+	usb_linux_disable_interface(sc->sc_fbsd_udev, sc->sc_ui);
+
 	if (udrv && udrv->disconnect) {
 		(udrv->disconnect) (sc->sc_ui);
 	}
@@ -325,6 +363,9 @@ usb_linux_detach(device_t dev)
 	 * needed any more.
 	 */
 	usb_linux_cleanup_interface(sc->sc_fbsd_udev, sc->sc_ui);
+	/* Releases devres after disconnect, as Linux does. */
+	put_device(&sc->sc_ui->dev);
+	sc->sc_ui = NULL;
 	return (0);
 }
 
@@ -429,6 +470,12 @@ usb_submit_urb(struct urb *urb, uint16_t mem_flags)
 
 	uhe = urb->endpoint;
 
+	/* The interface is being detached. */
+	if (uhe->bsd_disabled) {
+		err = -ENOENT;
+		goto done;
+	}
+
 	/*
 	 * Check that we have got a FreeBSD USB transfer that will dequeue
 	 * the URB structure and do the real transfer. If there are no USB
@@ -440,6 +487,12 @@ usb_submit_urb(struct urb *urb, uint16_t mem_flags)
 
 		TAILQ_INSERT_TAIL(&uhe->bsd_urb_list, urb, bsd_urb_list);
 
+		/*
+		 * Like Linux, hold a reference until the URB is given
+		 * back, so the caller may free its own reference right
+		 * after submitting.
+		 */
+		urb->ref_count++;
 		urb->status = -EINPROGRESS;
 
 		usbd_transfer_start(uhe->bsd_xfer[0]);
@@ -494,6 +547,7 @@ usb_unlink_urb_sub(struct urb *urb, uint8_t drain)
 	struct usb_host_endpoint *uhe;
 	uint16_t x;
 	uint8_t do_unlock;
+	uint8_t do_put = 0;
 	int err;
 
 	if (urb == NULL)
@@ -515,22 +569,27 @@ usb_unlink_urb_sub(struct urb *urb, uint8_t drain)
 		/* not started yet, just remove it from the queue */
 		TAILQ_REMOVE(&uhe->bsd_urb_list, urb, bsd_urb_list);
 		urb->bsd_urb_list.tqe_prev = NULL;
-		urb->status = -ECONNRESET;
+		/* As in Linux: -ENOENT for kill, -ECONNRESET for unlink. */
+		urb->status = drain ? -ENOENT : -ECONNRESET;
 		urb->actual_length = 0;
 
 		for (x = 0; x < urb->number_of_packets; x++) {
 			urb->iso_frame_desc[x].actual_length = 0;
 		}
 
+		usb_unanchor_urb(urb);
 		if (urb->complete) {
 			(urb->complete) (urb);
 		}
+		/* Drop the submit reference after the last use below. */
+		do_put = 1;
 	} else {
 		/*
 		 * If the URB is not on the URB list, then check if one of
 		 * the FreeBSD USB transfer are processing the current URB.
 		 * If so, re-start that transfer, which will lead to the
-		 * termination of that URB:
+		 * termination of that URB. The transfer callback
+		 * unanchors the URB and drops the submit reference.
 		 */
 		usb_unlink_bsd(uhe->bsd_xfer[0], urb, drain);
 		usb_unlink_bsd(uhe->bsd_xfer[1], urb, drain);
@@ -539,6 +598,8 @@ usb_unlink_urb_sub(struct urb *urb, uint8_t drain)
 done:
 	if (drain)
 		urb->kill_count--;
+	if (do_put)
+		usb_free_urb(urb);
 	if (do_unlock)
 		mtx_unlock(&Giant);
 	return (err);
@@ -635,6 +696,39 @@ done:
 }
 
 /*------------------------------------------------------------------------*
+ *	usb_linux_error
+ *
+ * Convert a FreeBSD USB error to the negative errno a Linux host
+ * controller would report, so that drivers can tell a stalled
+ * endpoint from a transient bus error or a removed device.
+ *------------------------------------------------------------------------*/
+static int
+usb_linux_error(usb_error_t err)
+{
+	switch (err) {
+	case USB_ERR_NORMAL_COMPLETION:
+		return (0);
+	case USB_ERR_STALLED:
+		return (-EPIPE);
+	case USB_ERR_TIMEOUT:
+		return (-ETIMEDOUT);
+	case USB_ERR_NOMEM:
+		return (-ENOMEM);
+	case USB_ERR_NOT_CONFIGURED:
+	case USB_ERR_NO_PIPE:
+		return (-ENODEV);
+	case USB_ERR_INVAL:
+	case USB_ERR_BAD_ADDRESS:
+	case USB_ERR_BAD_BUFSIZE:
+	case USB_ERR_BAD_FLAG:
+		return (-EINVAL);
+	default:
+		/* Linux reports bus and unknown errors as -EPROTO. */
+		return (-EPROTO);
+	}
+}
+
+/*------------------------------------------------------------------------*
  *	usb_control_msg
  *
  * The following function performs a control transfer sequence one any
@@ -685,7 +779,7 @@ usb_control_msg(struct usb_device *dev, struct usb_host_endpoint *uhe,
 		    NULL, &req, data, USB_SHORT_XFER_OK,
 		    &actlen, timeout);
 		if (err) {
-			err = -EPIPE;
+			err = usb_linux_error(err);
 		} else {
 			err = actlen;
 		}
@@ -742,7 +836,7 @@ usb_control_msg(struct usb_device *dev, struct usb_host_endpoint *uhe,
 int
 usb_set_interface(struct usb_device *dev, uint8_t iface_no, uint8_t alt_index)
 {
-	struct usb_interface *p_ui = usb_ifnum_to_if(dev, iface_no);
+	struct _lkpi_usb_interface *p_ui = usb_ifnum_to_if(dev, iface_no);
 	int err;
 
 	if (p_ui == NULL)
@@ -788,6 +882,7 @@ usb_setup_endpoint(struct usb_device *dev,
 	if (bufsize == 0) {
 		return (0);
 	}
+	uhe->bsd_disabled = false;
 	memset(cfg, 0, sizeof(cfg));
 
 	if (type == UE_ISOCHRONOUS) {
@@ -847,6 +942,100 @@ usb_setup_endpoint(struct usb_device *dev,
 	return (0);
 }
 
+/* Based on lkpi_pci_dev_release. */
+static void
+lkpi_usb_dev_release(struct device *dev)
+{
+	lkpi_devres_release_free_list(dev);
+	spin_lock_destroy(&dev->devres_lock);
+}
+
+/*
+ * Based on lkpi_pci_dev_init_common().  Called from attach for the interface
+ * being attached, so the kobject is named after that FreeBSD device.  The
+ * interface may have been used by an earlier attach, so start from a
+ * clean struct device.  The reference is dropped in detach or on attach
+ * failure, which runs lkpi_usb_dev_release().
+ */
+static int
+lkpifill_usb_dev(device_t dev, struct _lkpi_usb_interface *intf)
+{
+	int error;
+
+	memset(&intf->dev, 0, sizeof(intf->dev));
+	intf->dev.bsddev = dev;
+	intf->dev.parent = &linux_root_device;
+	intf->dev.release = lkpi_usb_dev_release;
+	spin_lock_init(&intf->dev.devres_lock);
+	INIT_LIST_HEAD(&intf->dev.devres_head);
+	INIT_LIST_HEAD(&intf->dev.irqents);
+
+	error = kobject_init_and_add(&intf->dev.kobj, &linux_dev_ktype,
+	    &linux_root_device.kobj, device_get_nameunit(dev));
+	if (error != 0) {
+		printf("%s:%d: kobject_init_and_add returned %d\n",
+		    __func__, __LINE__, error);
+		kobject_put(&intf->dev.kobj);
+		return (error);
+	}
+	return (0);
+}
+
+/*
+ * counts[0] = endpoint count (maximum 15 * 2 * 256)
+ * counts[1] = interface count combining alternates (maximum 256)
+ * counts[2] = interface count including alternates (maximum 256)
+ * Returns true if the descriptors made sense.
+ */
+static bool
+count_usb_children(struct usb_config_descriptor *cd, unsigned int counts[3])
+{
+	struct usb_descriptor *desc = NULL;
+	const int id_size = sizeof(struct usb_interface_descriptor);
+	const int ed_size = sizeof(struct usb_endpoint_descriptor);
+	struct usb_interface_descriptor *id;
+	struct usb_endpoint_descriptor *ed;
+	int ed_in;
+	int last_iface = -1;
+	unsigned int endpoints_this_interface[2] = {0, 0};
+	unsigned int n_endpoints = 0;
+	unsigned int n_interfaces = 0;
+	unsigned int n_alternates = 0;
+
+	while ((desc = usb_desc_foreach(cd, desc)) != NULL) {
+		if (desc->bDescriptorType == UDESC_ENDPOINT) {
+			if (desc->bLength < ed_size)
+				return (false);
+			if (last_iface < 0)
+				return (false);
+			n_endpoints++;
+			ed = (struct usb_endpoint_descriptor *)desc;
+			ed_in = !!usb_endpoint_dir_in(ed);
+			if (++endpoints_this_interface[ed_in] > 15)
+				return (false);
+			continue;
+		}
+		if (desc->bDescriptorType == UDESC_INTERFACE) {
+			if (desc->bLength < id_size)
+				return (false);
+			id = (struct usb_interface_descriptor *)desc;
+			if (last_iface != id->bInterfaceNumber) {
+				last_iface = id->bInterfaceNumber;
+				++n_interfaces;
+			}
+			if (++n_alternates > 256)
+				return (false);
+			endpoints_this_interface[0] = 0;
+			endpoints_this_interface[1] = 0;
+			continue;
+		}
+	}
+	counts[0] = n_endpoints;
+	counts[1] = n_interfaces;
+	counts[2] = n_alternates;
+	return (true);
+}
+
 /*------------------------------------------------------------------------*
  *	usb_linux_create_usb_device
  *
@@ -858,111 +1047,89 @@ static int
 usb_linux_create_usb_device(struct usb_device *udev, device_t dev)
 {
 	struct usb_config_descriptor *cd = usbd_get_config_descriptor(udev);
-	struct usb_descriptor *desc;
+	struct usb_descriptor *desc = NULL;
 	struct usb_interface_descriptor *id;
 	struct usb_endpoint_descriptor *ed;
-	struct usb_interface *p_ui = NULL;
+	struct _lkpi_usb_interface *p_ui = NULL;
 	struct usb_host_interface *p_uhi = NULL;
 	struct usb_host_endpoint *p_uhe = NULL;
 	usb_size_t size;
-	uint16_t niface_total;
-	uint16_t nedesc;
-	uint16_t iface_no_curr;
-	uint16_t iface_index;
-	uint8_t pass;
+	/* Last seen UDESC_INTERFACE bInterfaceNumber. */
+	int iface_no_curr = -1;
 	uint8_t iface_no;
+	/*
+	 * FreeBSD interface index of the current interface: like
+	 * usb_idesc_foreach(), advance only on a new bInterfaceNumber,
+	 * not on an alternate setting.
+	 */
+	int iface_index = -1;
+	unsigned int counts[3]; /* endpoints, interface groups, interfaces */
+
+	/* All interfaces are set up when the first one attaches. */
+	if (udev->linux_endpoint_start != NULL)
+		return (0);
+
+	if (!count_usb_children(cd, counts))
+		return (ENXIO);
+
+	size = (sizeof(*p_uhe) * counts[0]) +
+	    (sizeof(*p_ui) * counts[1]) +
+	    (sizeof(*p_uhi) * counts[2]);
+
+	p_uhe = malloc(size, M_USBDEV, M_WAITOK | M_ZERO);
+	if (p_uhe == NULL) /* only possible without M_WAITOK */
+		return (ENOMEM);
+	p_ui = (void *)(p_uhe + counts[0]);
+	p_uhi = (void *)(p_ui + counts[1]);
+
+	udev->linux_iface_start = p_ui;
+	udev->linux_iface_end = p_ui + counts[1];
+	udev->linux_endpoint_start = p_uhe;
+	udev->linux_endpoint_end = p_uhe + counts[0];
+	udev->devnum = device_get_unit(dev);
+	bcopy(&udev->ddesc, &udev->descriptor, sizeof(udev->descriptor));
+	bcopy(udev->ctrl_ep.edesc, &udev->ep0.desc, sizeof(udev->ep0.desc));
 
 	/*
-	 * We do two passes. One pass for computing necessary memory size
-	 * and one pass to initialize all the allocated memory structures.
+	 * Iterate over all the USB descriptors. Use the USB config
+	 * descriptor pointer provided by the FreeBSD USB stack.
+	 * Assume that usb_desc_foreach returns exactly the same
+	 * subobjects that count_usb_children found.
 	 */
-	for (pass = 0; pass < 2; pass++) {
-		iface_no_curr = 0xFFFF;
-		niface_total = 0;
-		iface_index = 0;
-		nedesc = 0;
-		desc = NULL;
-
-		/*
-		 * Iterate over all the USB descriptors. Use the USB config
-		 * descriptor pointer provided by the FreeBSD USB stack.
-		 */
-		while ((desc = usb_desc_foreach(cd, desc))) {
-			/*
-			 * Build up a tree according to the descriptors we
-			 * find:
-			 */
-			switch (desc->bDescriptorType) {
-			case UDESC_DEVICE:
-				break;
-
-			case UDESC_ENDPOINT:
-				ed = (void *)desc;
-				if ((ed->bLength < sizeof(*ed)) ||
-				    (iface_index == 0))
-					break;
-				if (p_uhe) {
-					bcopy(ed, &p_uhe->desc, sizeof(p_uhe->desc));
-					p_uhe->bsd_iface_index = iface_index - 1;
-					TAILQ_INIT(&p_uhe->bsd_urb_list);
-					p_uhe++;
-				}
-				if (p_uhi) {
-					(p_uhi - 1)->desc.bNumEndpoints++;
-				}
-				nedesc++;
-				break;
-
-			case UDESC_INTERFACE:
-				id = (void *)desc;
-				if (id->bLength < sizeof(*id))
-					break;
-				if (p_uhi) {
-					bcopy(id, &p_uhi->desc, sizeof(p_uhi->desc));
-					p_uhi->desc.bNumEndpoints = 0;
-					p_uhi->endpoint = p_uhe;
-					p_uhi->string = "";
-					p_uhi->bsd_iface_index = iface_index;
-					p_uhi++;
-				}
-				iface_no = id->bInterfaceNumber;
-				niface_total++;
-				if (iface_no_curr != iface_no) {
-					if (p_ui) {
-						p_ui->altsetting = p_uhi - 1;
-						p_ui->cur_altsetting = p_uhi - 1;
-						p_ui->bsd_iface_index = iface_index;
-						p_ui->linux_udev = udev;
-						p_ui++;
-					}
-					iface_no_curr = iface_no;
-					iface_index++;
-				}
-				break;
-
-			default:
-				break;
-			}
+	while ((desc = usb_desc_foreach(cd, desc)) != NULL) {
+		/* Build up a tree according to the descriptors we find: */
+		if (desc->bDescriptorType == UDESC_ENDPOINT) {
+			ed = (void *)desc;
+			KASSERT(iface_index >= 0,
+				("%s: usb_desc_foreach changed", __func__));
+			bcopy(ed, &p_uhe->desc, sizeof(p_uhe->desc));
+			p_uhe->bsd_iface_index = iface_index;
+			TAILQ_INIT(&p_uhe->bsd_urb_list);
+			p_uhe++;
+			(p_uhi - 1)->desc.bNumEndpoints++;
+			continue;
 		}
+		if (desc->bDescriptorType == UDESC_INTERFACE) {
+			id = (void *)desc;
+			iface_no = id->bInterfaceNumber;
+			if (iface_no_curr != iface_no) {
+				/* First alternate setting of a new interface. */
+				iface_index++;
+				p_ui->altsetting = p_uhi;
+				p_ui->cur_altsetting = p_uhi;
+				p_ui->bsd_iface_index = iface_index;
+				p_ui->linux_udev = udev;
+				p_ui++;
+			}
+			iface_no_curr = iface_no;
+			(p_ui - 1)->num_altsetting++;
 
-		if (pass == 0) {
-			size = (sizeof(*p_uhe) * nedesc) +
-			    (sizeof(*p_ui) * iface_index) +
-			    (sizeof(*p_uhi) * niface_total);
-
-			p_uhe = malloc(size, M_USBDEV, M_WAITOK | M_ZERO);
-			p_ui = (void *)(p_uhe + nedesc);
-			p_uhi = (void *)(p_ui + iface_index);
-
-			udev->linux_iface_start = p_ui;
-			udev->linux_iface_end = p_ui + iface_index;
-			udev->linux_endpoint_start = p_uhe;
-			udev->linux_endpoint_end = p_uhe + nedesc;
-			udev->devnum = device_get_unit(dev);
-			bcopy(&udev->ddesc, &udev->descriptor,
-			    sizeof(udev->descriptor));
-			bcopy(udev->ctrl_ep.edesc, &udev->ep0.desc,
-			    sizeof(udev->ep0.desc));
+			bcopy(id, &p_uhi->desc, sizeof(p_uhi->desc));
+			p_uhi->desc.bNumEndpoints = 0;
+			p_uhi->endpoint = p_uhe;
+			p_uhi->string = "";
+			p_uhi->bsd_iface_index = iface_index;
+			p_uhi++;
 		}
 	}
 	return (0);
@@ -1020,7 +1187,7 @@ usb_find_host_endpoint(struct usb_device *dev, uint8_t type, uint8_t ep)
 	struct usb_host_endpoint *uhe;
 	struct usb_host_endpoint *uhe_end;
 	struct usb_host_interface *uhi;
-	struct usb_interface *ui;
+	struct _lkpi_usb_interface *ui;
 	uint8_t ea;
 	uint8_t at;
 	uint8_t mask;
@@ -1076,7 +1243,8 @@ usb_find_host_endpoint(struct usb_device *dev, uint8_t type, uint8_t ep)
  * characteristics.
  *------------------------------------------------------------------------*/
 struct usb_host_interface *
-usb_altnum_to_altsetting(const struct usb_interface *intf, uint8_t alt_index)
+usb_altnum_to_altsetting(const struct _lkpi_usb_interface *intf,
+			 uint8_t alt_index)
 {
 	if (alt_index >= intf->num_altsetting) {
 		return (NULL);
@@ -1090,10 +1258,10 @@ usb_altnum_to_altsetting(const struct usb_interface *intf, uint8_t alt_index)
  * The following function searches up an USB interface by
  * "bInterfaceNumber". If no match is found, NULL is returned.
  *------------------------------------------------------------------------*/
-struct usb_interface *
+struct _lkpi_usb_interface *
 usb_ifnum_to_if(struct usb_device *dev, uint8_t iface_no)
 {
-	struct usb_interface *p_ui;
+	struct _lkpi_usb_interface *p_ui;
 
 	for (p_ui = dev->linux_iface_start;
 	    p_ui != dev->linux_iface_end;
@@ -1116,10 +1284,10 @@ usb_buffer_alloc(struct usb_device *dev, usb_size_t size, uint16_t mem_flags, ui
 }
 
 /*------------------------------------------------------------------------*
- *	usbd_get_intfdata
+ *	usb_get_intfdata
  *------------------------------------------------------------------------*/
 void   *
-usbd_get_intfdata(struct usb_interface *intf)
+usb_get_intfdata(struct _lkpi_usb_interface *intf)
 {
 	return (intf->bsd_priv_sc);
 }
@@ -1133,7 +1301,7 @@ usbd_get_intfdata(struct usb_interface *intf)
  * function is not part of the Linux USB API, and is for internal use
  * only.
  *------------------------------------------------------------------------*/
-void
+int
 usb_linux_register(void *arg)
 {
 	struct usb_driver *drv = arg;
@@ -1143,6 +1311,8 @@ usb_linux_register(void *arg)
 	mtx_unlock(&Giant);
 
 	usb_needs_explore_all();
+
+	return (0);
 }
 
 /*------------------------------------------------------------------------*
@@ -1214,11 +1384,26 @@ usb_buffer_free(struct usb_device *dev, usb_size_t size,
 void
 usb_free_urb(struct urb *urb)
 {
+	uint8_t do_unlock;
+
 	if (urb == NULL) {
 		return;
 	}
+	do_unlock = mtx_owned(&Giant) ? 0 : 1;
+	if (do_unlock)
+		mtx_lock(&Giant);
+	/* For simplicity, a zero-filled urb has logical reference count 1. */
+	if (urb->ref_count > 0) {
+		urb->ref_count--;
+		if (do_unlock)
+			mtx_unlock(&Giant);
+		return;
+	}
+
 	/* make sure that the current URB is not active */
 	usb_kill_urb(urb);
+	if (do_unlock)
+		mtx_unlock(&Giant);
 
 	/* destroy condition variable */
 	cv_destroy(&urb->cv_wait);
@@ -1259,7 +1444,7 @@ usb_kill_urb(struct urb *urb)
  * data pointer. It is used by most Linux USB device drivers.
  *------------------------------------------------------------------------*/
 void
-usb_set_intfdata(struct usb_interface *intf, void *data)
+usb_set_intfdata(struct _lkpi_usb_interface *intf, void *data)
 {
 	intf->bsd_priv_sc = data;
 }
@@ -1271,7 +1456,8 @@ usb_set_intfdata(struct usb_interface *intf, void *data)
  * associated with a Linux USB interface. It is for internal use only.
  *------------------------------------------------------------------------*/
 static void
-usb_linux_cleanup_interface(struct usb_device *dev, struct usb_interface *iface)
+usb_linux_cleanup_interface(struct usb_device *dev,
+			    struct _lkpi_usb_interface *iface)
 {
 	struct usb_host_interface *uhi;
 	struct usb_host_interface *uhi_end;
@@ -1285,6 +1471,72 @@ usb_linux_cleanup_interface(struct usb_device *dev, struct usb_interface *iface)
 		uhe_end = uhi->endpoint + uhi->desc.bNumEndpoints;
 		while (uhe != uhe_end) {
 			usb_setup_endpoint(dev, uhe, 0);
+			uhe++;
+		}
+		uhi++;
+	}
+}
+
+/*------------------------------------------------------------------------*
+ *	usb_linux_disable_endpoint
+ *
+ * Like Linux usb_disable_endpoint(): refuse new URBs, cancel the URB
+ * in flight and give back the queued ones, all with -ESHUTDOWN.  The
+ * FreeBSD transfers are freed; usb_setup_endpoint() enables the
+ * endpoint again.  Must be called without Giant.
+ *------------------------------------------------------------------------*/
+static void
+usb_linux_disable_endpoint(struct usb_device *dev,
+    struct usb_host_endpoint *uhe)
+{
+	struct urb *urb;
+	uint16_t x;
+
+	mtx_lock(&Giant);
+	uhe->bsd_disabled = true;
+	mtx_unlock(&Giant);
+
+	/* Drain the transfer; its callback completes the active URB. */
+	usb_setup_endpoint(dev, uhe, 0);
+
+	mtx_lock(&Giant);
+	while ((urb = TAILQ_FIRST(&uhe->bsd_urb_list)) != NULL) {
+		TAILQ_REMOVE(&uhe->bsd_urb_list, urb, bsd_urb_list);
+		urb->bsd_urb_list.tqe_prev = NULL;
+		urb->status = -ESHUTDOWN;
+		urb->actual_length = 0;
+		for (x = 0; x < urb->number_of_packets; x++)
+			urb->iso_frame_desc[x].actual_length = 0;
+		usb_unanchor_urb(urb);
+		if (urb->complete)
+			(urb->complete) (urb);
+		/* Drop the submit reference. */
+		usb_free_urb(urb);
+	}
+	mtx_unlock(&Giant);
+}
+
+/*------------------------------------------------------------------------*
+ *	usb_linux_disable_interface
+ *
+ * Disable every endpoint of every alternate setting of an interface.
+ *------------------------------------------------------------------------*/
+static void
+usb_linux_disable_interface(struct usb_device *dev,
+    struct _lkpi_usb_interface *iface)
+{
+	struct usb_host_interface *uhi;
+	struct usb_host_interface *uhi_end;
+	struct usb_host_endpoint *uhe;
+	struct usb_host_endpoint *uhe_end;
+
+	uhi = iface->altsetting;
+	uhi_end = iface->altsetting + iface->num_altsetting;
+	while (uhi != uhi_end) {
+		uhe = uhi->endpoint;
+		uhe_end = uhi->endpoint + uhi->desc.bNumEndpoints;
+		while (uhe != uhe_end) {
+			usb_linux_disable_endpoint(dev, uhe);
 			uhe++;
 		}
 		uhi++;
@@ -1316,9 +1568,12 @@ usb_linux_complete(struct usb_xfer *xfer)
 
 	urb = usbd_xfer_get_priv(xfer);
 	usbd_xfer_set_priv(xfer, NULL);
+	/* Same order as Linux: unanchor, complete, drop submit reference. */
+	usb_unanchor_urb(urb);
 	if (urb->complete) {
 		(urb->complete) (urb);
 	}
+	usb_free_urb(urb);
 }
 
 /*------------------------------------------------------------------------*
@@ -1466,9 +1721,14 @@ tr_setup:
 
 	default:			/* Error */
 		if (xfer->error == USB_ERR_CANCELLED) {
-			urb->status = -ECONNRESET;
+			/* kill_count is set while usb_kill_urb() drains. */
+			if (uhe->bsd_disabled)
+				urb->status = -ESHUTDOWN;
+			else
+				urb->status = urb->kill_count != 0 ?
+				    -ENOENT : -ECONNRESET;
 		} else {
-			urb->status = -EPIPE;	/* stalled */
+			urb->status = usb_linux_error(xfer->error);
 		}
 
 		/* Set zero for "actual_length" */
@@ -1636,10 +1896,24 @@ setup_bulk:
 		return;
 
 	default:
+		DPRINTF("ep %#x error %s\n",
+		    uhe->desc.bEndpointAddress, usbd_errstr(xfer->error));
 		if (xfer->error == USB_ERR_CANCELLED) {
-			urb->status = -ECONNRESET;
+			/* kill_count is set while usb_kill_urb() drains. */
+			if (uhe->bsd_disabled)
+				urb->status = -ESHUTDOWN;
+			else
+				urb->status = urb->kill_count != 0 ?
+				    -ENOENT : -ECONNRESET;
 		} else {
-			urb->status = -EPIPE;
+			urb->status = usb_linux_error(xfer->error);
+			/*
+			 * Clear the stall before the next transfer.  Linux
+			 * drivers may not call usb_clear_halt().  Control
+			 * endpoints recover on the next SETUP packet.
+			 */
+			if (!xfer->flags_int.control_xfr)
+				usbd_xfer_set_stall(xfer);
 		}
 
 		/* Set zero for "actual_length" */
@@ -1708,6 +1982,183 @@ usb_bulk_msg(struct usb_device *udev, struct usb_host_endpoint *uhe,
 
 	return (err);
 }
+
+/* Endpoint accessors */
+int
+usb_endpoint_num(struct usb_endpoint_descriptor *endpoint)
+{
+	return (UE_GET_ADDR(endpoint->bEndpointAddress));
+}
+
+int
+usb_endpoint_dir_in(struct usb_endpoint_descriptor *endpoint)
+{
+	return ((endpoint->bEndpointAddress & UE_DIR_IN) != 0);
+}
+
+int
+usb_endpoint_dir_out(struct usb_endpoint_descriptor *endpoint)
+{
+	return ((endpoint->bEndpointAddress & UE_DIR_IN) == 0);
+}
+
+int
+usb_endpoint_xfer_bulk(struct usb_endpoint_descriptor *endpoint)
+{
+	return ((endpoint->bmAttributes & UE_XFERTYPE) == UE_BULK);
+}
+
+int
+usb_endpoint_xfer_control(struct usb_endpoint_descriptor *endpoint)
+{
+	return ((endpoint->bmAttributes & UE_XFERTYPE) == UE_CONTROL);
+}
+
+int
+usb_endpoint_xfer_int(struct usb_endpoint_descriptor *endpoint)
+{
+	return ((endpoint->bmAttributes & UE_XFERTYPE) == UE_INTERRUPT);
+}
+
+int
+usb_endpoint_xfer_isoc(struct usb_endpoint_descriptor *endpoint)
+{
+	return ((endpoint->bmAttributes & UE_XFERTYPE) == UE_ISOCHRONOUS);
+}
+
+int
+usb_endpoint_maxp(struct usb_endpoint_descriptor *endpoint)
+{
+	/* Bits 10-0; bits 12-11 are the high-bandwidth multiplier. */
+	return (UGETW(endpoint->wMaxPacketSize) & 0x7ff);
+}
+
+/*
+ * Like Linux: reset the port and restore the configuration without
+ * detaching drivers.  Drivers on other interfaces of the device are not
+ * told (LinuxKPI has no pre_reset/post_reset), and alternate settings
+ * are not restored.  May sleep; do not call from a completion callback.
+ */
+int
+usb_reset_device(struct usb_device *dev)
+{
+	struct usb_config_descriptor *cd;
+	struct usb_endpoint *ep;
+	usb_error_t err;
+	uint8_t do_unlock;
+
+	if (!lkpi_usb_reset_device)
+		return (0);
+	if (dev->flags.usb_mode != USB_MODE_HOST || dev->parent_hub == NULL)
+		return (-EINVAL);
+	/*
+	 * Suspend and resume hold sr_sx but not enum_sx; locking enum_sx
+	 * there would reverse the lock order and recurse on sr_sx.
+	 */
+	if (!usbd_enum_is_locked(dev) && sx_xlocked(&dev->sr_sx))
+		return (-EBUSY);
+
+	do_unlock = usbd_enum_lock(dev);
+	/* Port reset, restore the address, reread the device descriptor. */
+	err = usbd_req_re_enumerate(dev, NULL);
+	if (err == 0) {
+		cd = usbd_get_config_descriptor(dev);
+		err = usbd_req_set_config(dev, NULL, cd->bConfigurationValue);
+	}
+	if (err == 0) {
+		usb_set_device_state(dev, USB_STATE_CONFIGURED);
+		/* The device restarted every endpoint at DATA0. */
+		ep = NULL;
+		while ((ep = usb_endpoint_foreach(dev, ep)) != NULL)
+			usbd_clear_data_toggle(dev, ep);
+	}
+	if (do_unlock)
+		usbd_enum_unlock(dev);
+
+	if (err != 0) {
+		device_printf(dev->parent_dev, "usb_reset_device: %s\n",
+		    usbd_errstr(err));
+		return (-EIO);
+	}
+	return (0);
+}
+
+/*
+ * URB Anchors.  Anchor lists and URB reference counts are
+ * protected by Giant.
+ */
+void
+usb_anchor_urb(struct urb *urb, struct usb_anchor *anchor)
+{
+	uint8_t do_unlock;
+
+	if (urb == NULL || anchor == NULL)
+		return;
+	do_unlock = mtx_owned(&Giant) ? 0 : 1;
+	if (do_unlock)
+		mtx_lock(&Giant);
+	++urb->ref_count;
+	urb->anchor = anchor;
+	TAILQ_INSERT_TAIL(&anchor->urbs, urb, bsd_anchor_list);
+	if (do_unlock)
+		mtx_unlock(&Giant);
+}
+
+void
+usb_unanchor_urb(struct urb *urb)
+{
+	struct usb_anchor *anchor;
+	uint8_t do_unlock;
+
+	if (urb == NULL)
+		return;
+	do_unlock = mtx_owned(&Giant) ? 0 : 1;
+	if (do_unlock)
+		mtx_lock(&Giant);
+	anchor = urb->anchor;
+	if (anchor != NULL) {
+		urb->anchor = NULL;
+		TAILQ_REMOVE(&anchor->urbs, urb, bsd_anchor_list);
+		/* Drop the anchor's reference. */
+		usb_free_urb(urb);
+	}
+	if (do_unlock)
+		mtx_unlock(&Giant);
+}
+
+/*
+ * Kill all URBs on the anchor, newest first.  usb_kill_urb() waits for
+ * an active URB to be given back, and the giveback unanchors it.  An
+ * URB that was anchored but never submitted is unanchored here so the
+ * loop terminates.
+ */
+void
+usb_kill_anchored_urbs(struct usb_anchor *anchor)
+{
+	struct urb *urb;
+	uint8_t do_unlock;
+
+	do_unlock = mtx_owned(&Giant) ? 0 : 1;
+	if (do_unlock)
+		mtx_lock(&Giant);
+	while ((urb = TAILQ_LAST(&anchor->urbs, usb_anchor_head)) != NULL) {
+		/* Keep the URB alive while it is killed. */
+		urb->ref_count++;
+		usb_kill_urb(urb);
+		if (urb->anchor == anchor)
+			usb_unanchor_urb(urb);
+		usb_free_urb(urb);
+	}
+	if (do_unlock)
+		mtx_unlock(&Giant);
+}
+
+void
+init_usb_anchor(struct usb_anchor *anchor)
+{
+	TAILQ_INIT(&anchor->urbs);
+}
+
 MODULE_DEPEND(linuxkpi, usb, 1, 1, 1);
 
 static void

@@ -74,6 +74,7 @@ struct usb_host_endpoint {
 	usb_frlength_t fbsd_buf_size;
 	uint16_t extralen;
 	uint8_t	bsd_iface_index;
+	bool	bsd_disabled;		/* set by detach; Giant */
 } __aligned(USB_HOST_ALIGN);
 
 struct usb_host_interface {
@@ -276,8 +277,8 @@ struct usb_device {
 	/* Linux compat */
 	struct usb_device_descriptor descriptor;
 	struct usb_host_endpoint ep0;
-	struct usb_interface *linux_iface_start;
-	struct usb_interface *linux_iface_end;
+	struct _lkpi_usb_interface *linux_iface_start;
+	struct _lkpi_usb_interface *linux_iface_end;
 	struct usb_host_endpoint *linux_endpoint_start;
 	struct usb_host_endpoint *linux_endpoint_end;
 	uint16_t devnum;
