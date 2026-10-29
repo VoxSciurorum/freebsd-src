@@ -53,6 +53,9 @@ extern bool rtw_bf_support;
 extern bool rtw_disable_lps_deep_mode;
 extern unsigned int rtw_debug_mask;
 extern bool rtw_edcca_enabled;
+#if defined(__FreeBSD__)
+extern bool rtw_usb_skip_ips;
+#endif
 extern const struct ieee80211_ops rtw_ops;
 
 #define RTW_MAX_CHANNEL_NUM_2G 14

@@ -2,6 +2,10 @@
 /* Copyright(c) 2018-2019  Realtek Corporation
  */
 
+#if defined(__FreeBSD__)
+#define	LINUXKPI_PARAM_PREFIX	rtw88_usb_
+#endif
+
 #include <linux/module.h>
 #include <linux/usb.h>
 #include <linux/mutex.h>
@@ -243,7 +247,7 @@ static int rtw_usb_parse(struct rtw_dev *rtwdev,
 	struct usb_interface_descriptor *interface_desc = &host_interface->desc;
 	struct usb_endpoint_descriptor *endpoint;
 	int num_out_pipes = 0;
-	int i;
+	int i, error;
 	u8 num;
 	const struct rtw_chip_info *chip = rtwdev->chip;
 	const struct rtw_rqpn *rqpn;
@@ -281,6 +285,22 @@ static int rtw_usb_parse(struct rtw_dev *rtwdev,
 
 			rtwusb->out_ep[num_out_pipes++] = num;
 		}
+
+#ifdef __FreeBSD__
+		/* Large enough that URBs are not split. */
+		if (usb_endpoint_xfer_bulk(endpoint)) {
+			error = usb_setup_endpoint(rtwusb->udev,
+						   &host_interface->endpoint[i],
+						   usb_endpoint_dir_in(endpoint) ?
+						   RTW_USB_MAX_RECVBUF_SZ :
+						   RTW_USB_MAX_XMITBUF_SZ);
+			if (error != 0) {
+				rtw_err(rtwdev, "usb_setup_endpoint %#x failed: %d\n",
+					endpoint->bEndpointAddress, error);
+				return error;
+			}
+		}
+#endif
 	}
 
 	rtwdev->hci.bulkout_num = num_out_pipes;
@@ -368,7 +388,7 @@ static int rtw_usb_write_port(struct rtw_dev *rtwdev, u8 qsel, struct sk_buff *s
 	struct rtw_usb *rtwusb = rtw_get_usb_priv(rtwdev);
 	struct usb_device *usbd = rtwusb->udev;
 	struct urb *urb;
-	unsigned int pipe;
+	usb_host_endpoint_t pipe;
 	int ret;
 	int ep = qsel_to_ep(rtwusb, qsel);
 
@@ -846,7 +866,7 @@ static void rtw_usb_link_ps(struct rtw_dev *rtwdev, bool enter)
 static void rtw_usb_init_burst_pkt_len(struct rtw_dev *rtwdev)
 {
 	struct rtw_usb *rtwusb = rtw_get_usb_priv(rtwdev);
-	enum usb_device_speed speed = rtwusb->udev->speed;
+	usb_device_speed_t speed = rtwusb->udev->speed;
 	u8 rxdma, burst_size;
 
 	rxdma = BIT_DMA_BURST_CNT | BIT_DMA_MODE;
@@ -1075,7 +1095,7 @@ static void rtw_usb_intf_deinit(struct rtw_dev *rtwdev,
 static int rtw_usb_switch_mode_old(struct rtw_dev *rtwdev)
 {
 	struct rtw_usb *rtwusb = rtw_get_usb_priv(rtwdev);
-	enum usb_device_speed cur_speed = rtwusb->udev->speed;
+	usb_device_speed_t cur_speed = rtwusb->udev->speed;
 	u8 hci_opt;
 
 	if (cur_speed == USB_SPEED_HIGH) {
@@ -1100,7 +1120,7 @@ static int rtw_usb_switch_mode_old(struct rtw_dev *rtwdev)
 
 static int rtw_usb_switch_mode_new(struct rtw_dev *rtwdev)
 {
-	enum usb_device_speed cur_speed;
+	usb_device_speed_t cur_speed;
 	u8 id = rtwdev->chip->id;
 	bool can_switch;
 	u32 pad_ctrl2;
@@ -1189,7 +1209,7 @@ static int rtw_usb_switch_mode(struct rtw_dev *rtwdev)
 #define USB_PHY_PAGE1	0xbb
 
 static void rtw_usb_phy_write(struct rtw_dev *rtwdev, u8 addr, u16 data,
-			      enum usb_device_speed speed)
+			      usb_device_speed_t speed)
 {
 	if (speed == USB_SPEED_SUPER) {
 		rtw_write8(rtwdev, REG_USB3_PHY_DAT_L, data & 0xff);
@@ -1203,7 +1223,7 @@ static void rtw_usb_phy_write(struct rtw_dev *rtwdev, u8 addr, u16 data,
 }
 
 static void rtw_usb_page_switch(struct rtw_dev *rtwdev,
-				enum usb_device_speed speed, u8 page)
+				usb_device_speed_t speed, u8 page)
 {
 	if (speed == USB_SPEED_SUPER)
 		return;
@@ -1212,7 +1232,7 @@ static void rtw_usb_page_switch(struct rtw_dev *rtwdev,
 }
 
 static void rtw_usb_phy_cfg(struct rtw_dev *rtwdev,
-			    enum usb_device_speed speed)
+			    usb_device_speed_t speed)
 {
 	const struct rtw_intf_phy_para *para = NULL;
 	u16 offset;
@@ -1282,7 +1302,7 @@ int rtw_usb_probe(struct usb_interface *intf, const struct usb_device_id *id)
 
 	ret = rtw_usb_intf_init(rtwdev, intf);
 	if (ret) {
-		rtw_err(rtwdev, "failed to init USB interface\n");
+		rtw_err(rtwdev, "failed to init USB interface (%d)\n", ret);
 		goto err_deinit_core;
 	}
 
@@ -1380,5 +1400,5 @@ MODULE_AUTHOR("Realtek Corporation");
 MODULE_DESCRIPTION("Realtek USB 802.11ac wireless driver");
 MODULE_LICENSE("Dual BSD/GPL");
 #if defined(__FreeBSD__)
-MODULE_DEPEND(rtw88, linuxkpi_usb, 1, 1, 1);
+MODULE_DEPEND(rtw88, linuxkpi, 1, 1, 1);
 #endif

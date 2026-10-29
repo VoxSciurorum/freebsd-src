@@ -7,7 +7,7 @@
 .\"
 .\" SPDX-License-Identifier: BSD-2-Clause
 .\"
-.Dd May 15, 2026
+.Dd October 28, 2026
 .Dt RTW88 4
 .Os
 .Sh NAME
@@ -76,6 +76,15 @@ Realtek 802.11ac wireless 8822be (RTL8822BE)
 Realtek 802.11ac wireless 8822ce (RTL8822CE)
 .El
 .Sh LOADER TUNABLES
+These can be set in
+.Xr loader.conf 5
+and read with
+.Xr sysctl 8 .
+All except
+.Va compat.linuxkpi.skb.mem_limit
+can also be changed with
+.Xr sysctl 8 ;
+unless noted otherwise, a change takes effect when a device next attaches.
 .Bl -tag -width indent
 .It Va compat.linuxkpi.skb.mem_limit
 If you are running a 64bit system with more than 4GB of main memory
@@ -87,7 +96,86 @@ and reboot once to make it effective.
 This tunable will work around a problem with DMA and limit allocations
 for network buffer memory to the lower 32bit of physical memory and
 make the driver work.
+.It Va compat.linuxkpi.rtw88_support_ht
+Set to
+.Sy 1
+to enable 802.11n (HT) support.
+The default is
+.Sy 0 ,
+which limits the driver to 802.11a/b/g.
+See
+.Sx BUGS .
+.It Va compat.linuxkpi.rtw88_support_vht
+Set to
+.Sy 1
+to enable 802.11ac (VHT) support.
+Use together with
+.Va compat.linuxkpi.rtw88_support_ht .
+The default is
+.Sy 0 .
+.It Va compat.linuxkpi.rtw88_support_bf
+Set to
+.Sy 0
+to disable beamformee support.
+The default is
+.Sy 1 .
+.It Va compat.linuxkpi.rtw88_disable_lps_deep
+Set to
+.Sy 1
+to disable the deep low power state.
+The default is
+.Sy 0 .
+.It Va compat.linuxkpi.rtw88_debug_mask
+Bit mask of driver debug messages to print.
+Takes effect immediately.
+The default is
+.Sy 0 .
+.It Va compat.linuxkpi.rtw88_pci_disable_msi
+Set to
+.Sy 1
+to use legacy interrupts instead of MSI on PCIe devices.
+The default is
+.Sy 0 .
+.It Va compat.linuxkpi.rtw88_pci_disable_aspm
+Set to
+.Sy 1
+to disable PCIe ASPM.
+The default is
+.Sy 0 .
+.It Va compat.linuxkpi.rtw88_usb_switch_usb_mode
+Set to
+.Sy 0
+to keep USB devices that start in USB 2 mode from switching to USB 3
+mode, which can interfere with the 2.4GHz band.
+When the switch is made the device detaches and attaches again.
+The default is
+.Sy 1 .
+.It Va compat.linuxkpi.rtw88_usb_skip_ips
+Set to
+.Sy 0
+to let USB devices enter the inactive power save (IPS) state.
+On USB devices leaving IPS stalls the bulk OUT endpoint and the
+device stops working until it is reset.
+Takes effect immediately.
+The default is
+.Sy 1 .
+.It Va compat.linuxkpi.usb_reset_device
+Set to
+.Sy 0
+to make the
+.Xr linuxkpi 4
+.Fn usb_reset_device
+function do nothing.
+The driver resets USB devices when they detach so that they attach
+cleanly the next time.
+Takes effect immediately.
+The default is
+.Sy 1 .
 .El
+.Pp
+See
+.Xr linuxkpi_wlan 4
+for tunables of the compat framework, such as hardware crypto offload.
 .Sh SEE ALSO
 .Xr linuxkpi 4 ,
 .Xr linuxkpi_wlan 4 ,
