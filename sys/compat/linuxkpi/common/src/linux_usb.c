@@ -2076,7 +2076,8 @@ usb_reset_device(struct usb_device *dev)
 		usbd_enum_unlock(dev);
 
 	if (err != 0) {
-		device_printf(dev->parent_dev, "usb_reset_device: %s\n",
+		/* parent_dev is the hub; use the name usbconfig(8) shows. */
+		printf("%s: usb_reset_device: %s\n", dev->ugen_name,
 		    usbd_errstr(err));
 		return (-EIO);
 	}
