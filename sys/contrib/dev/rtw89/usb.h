@@ -7,6 +7,13 @@
 
 #include "txrx.h"
 
+#ifdef __FreeBSD__
+#include <dev/usb/usb_device.h>
+
+/* FreeBSD transfer size for bulk OUT; larger URBs are split. */
+#define RTW89_USB_XMITBUF_SZ		20480
+#endif
+
 #define RTW89_USB_VENQT			0x05
 #define RTW89_USB_VENQT_READ		0xc0
 #define RTW89_USB_VENQT_WRITE		0x40
