@@ -4623,6 +4623,12 @@ lkpi_ic_vap_delete(struct ieee80211vap *vap)
 	IMPROVE("clear up other bits in this state");
 
 	wiphy_lock(hw->wiphy);
+	/*
+	 * Remove any chanctx still assigned (e.g., from scanning) while
+	 * the driver is running, as mac80211 does before removing the
+	 * interface.  Otherwise it is left for linuxkpi_ieee80211_iffree().
+	 */
+	lkpi_remove_chanctx(hw, vif);
 	lkpi_80211_mo_remove_interface(hw, vif);
 
 	/* Single VAP, so we can do this here. */
@@ -7316,13 +7322,23 @@ linuxkpi_ieee80211_iffree(struct ieee80211_hw *hw)
 	/* Chanctx_conf. */
 	if (!list_empty_careful(&lhw->lchanctx_list)) {
 		struct lkpi_chanctx *lchanctx, *next;
-		struct ieee80211_chanctx_conf *chanctx_conf;
 
 		list_for_each_entry_safe(lchanctx, next, &lhw->lchanctx_list, entry) {
 			if (lchanctx->added_to_drv) {
-				/* In reality we should panic? */
-				chanctx_conf = &lchanctx->chanctx_conf;
-				lkpi_80211_mo_remove_chanctx(hw, chanctx_conf);
+				/*
+				 * Every chanctx should have been removed
+				 * when its vif was deleted (see
+				 * lkpi_ic_vap_delete()), so this is a
+				 * LinuxKPI bug.  The driver may already have
+				 * freed its state (e.g., rtw88 destroys its
+				 * mutex in rtw_core_deinit()), so do not call
+				 * it; mac80211 calls no driver ops here
+				 * either.  ic is already freed.
+				 */
+				wiphy_err(hw->wiphy, "%s: lchanctx %p not "
+				    "removed before teardown\n", __func__,
+				    lchanctx);
+				lchanctx->added_to_drv = false;
 			}
 			list_del(&lchanctx->entry);
 			/* No need to reset the lchanctx here as we will free it below. */
