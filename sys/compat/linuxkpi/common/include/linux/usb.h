@@ -98,6 +98,10 @@ struct _lkpi_usb_interface {
 	void   *bsd_priv_sc;		/* device specific information */
 };
 
+/* After the next #define struct usb_interface means the LinuxKPI type.
+ * Avoid including core kernel USB-related headers after <linux/usb.h>.
+ * They may see the wrong type.
+ */
 #undef usb_interface
 #define	usb_interface _lkpi_usb_interface
 
