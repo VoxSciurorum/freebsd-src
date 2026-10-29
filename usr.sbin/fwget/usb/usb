@@ -6,9 +6,15 @@
 #  SPDX-License-Identifier: BSD-2-Clause
 
 
-usb_get_vendor()
+usb_get_vendor_id()
 {
 	local hexvendor=$(echo $1 | sed 's/.*idVendor=\(0x[0-9a-z]*\).*/\1/')
+	echo "${hexvendor}"
+}
+
+usb_get_vendor()
+{
+	local hexvendor=$(usb_get_vendor_id "$1")
 	case "${hexvendor}" in
 		0x148f)	echo "ralink" ;;
 	esac
@@ -27,6 +33,7 @@ usb_search_packages()
 
 	oldifs=$IFS
 	IFS=$'\n'
+	. ${LIBEXEC_PATH}/usb_network_realtek
 	for fulldevice in $(usbconfig -l dump_device_desc); do
 		case "${fulldevice}" in
 		"No device match or lack of permissions.")
@@ -34,11 +41,16 @@ usb_search_packages()
 			continue
 			;;
 		esac
+		# Realtek chips are sold under many vendor IDs.
+		vendorid=$(usb_get_vendor_id "${fulldevice}")
+		device=$(usb_get_device "${fulldevice}")
+		log_verbose "Trying to match device ${vendorid}:${device} with usb_network_realtek"
+		usb_network_realtek "${vendorid}:${device}"
+
 		vendor=$(usb_get_vendor "${fulldevice}")
 		if [ -z "${vendor}" ]; then
 			continue
 		fi
-		device=$(usb_get_device "${fulldevice}")
 		log_verbose "Trying to match device ${device} and vendor ${vendor} with usb_${vendor}"
 		if [ -f  ${LIBEXEC_PATH}/usb_${vendor} ]; then
 			. ${LIBEXEC_PATH}/usb_${vendor}
