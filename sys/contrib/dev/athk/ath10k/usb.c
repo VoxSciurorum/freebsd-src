@@ -90,13 +90,21 @@ static void ath10k_usb_free_pipe_resources(struct ath10k *ar,
 	}
 
 	ath10k_dbg(ar, ATH10K_DBG_USB,
+#if defined(__linux__)
 		   "usb free resources lpipe %d hpipe 0x%x urbs %d avail %d\n",
+#elif defined(__FreeBSD__)
+		   "usb free resources lpipe %d hpipe %p urbs %d avail %d\n",
+#endif
 		   pipe->logical_pipe_num, pipe->usb_pipe_handle,
 		   pipe->urb_alloc, pipe->urb_cnt);
 
 	if (pipe->urb_alloc != pipe->urb_cnt) {
 		ath10k_dbg(ar, ATH10K_DBG_USB,
+#if defined(__linux__)
 			   "usb urb leak lpipe %d hpipe 0x%x urbs %d avail %d\n",
+#elif defined(__FreeBSD__)
+			   "usb urb leak lpipe %d hpipe %p urbs %d avail %d\n",
+#endif
 			   pipe->logical_pipe_num, pipe->usb_pipe_handle,
 			   pipe->urb_alloc, pipe->urb_cnt);
 	}
@@ -230,7 +238,11 @@ static void ath10k_usb_post_recv_transfers(struct ath10k *ar,
 				  ath10k_usb_recv_complete, urb_context);
 
 		ath10k_dbg(ar, ATH10K_DBG_USB_BULK,
+#if defined(__linux__)
 			   "usb bulk recv submit %d 0x%x ep 0x%2.2x len %d buf 0x%p\n",
+#elif defined(__FreeBSD__)
+			   "usb bulk recv submit %d %p ep 0x%2.2x len %d buf 0x%p\n",
+#endif
 			   recv_pipe->logical_pipe_num,
 			   recv_pipe->usb_pipe_handle, recv_pipe->ep_address,
 			   ATH10K_USB_RX_BUFFER_SIZE, urb_context->skb);
@@ -813,7 +825,11 @@ static int ath10k_usb_alloc_pipe_resources(struct ath10k *ar,
 	}
 
 	ath10k_dbg(ar, ATH10K_DBG_USB,
+#if defined(__linux__)
 		   "usb alloc resources lpipe %d hpipe 0x%x urbs %d\n",
+#elif defined(__FreeBSD__)
+		   "usb alloc resources lpipe %d hpipe %p urbs %d\n",
+#endif
 		   pipe->logical_pipe_num, pipe->usb_pipe_handle,
 		   pipe->urb_alloc);
 
@@ -893,11 +909,14 @@ static int ath10k_usb_setup_pipe_resources(struct ath10k *ar,
 
 		pipe->ar_usb = ar_usb;
 		pipe->logical_pipe_num = pipe_num;
-#if defined(__linux__)
+		/*
+		 * Keep the direction bit on FreeBSD too: ATH10K_USB_IS_DIR_IN()
+		 * tests it and the LinuxKPI pipe macros accept it.
+		 */
 		pipe->ep_address = endpoint->bEndpointAddress;
+#if defined(__linux__)
 		pipe->max_packet_size = le16_to_cpu(endpoint->wMaxPacketSize);
 #elif defined(__FreeBSD__)
-		pipe->ep_address = endpoint->bEndpointAddress & UE_ADDR;
 		pipe->max_packet_size = UGETW(endpoint->wMaxPacketSize);
 #endif
 
@@ -938,6 +957,22 @@ static int ath10k_usb_setup_pipe_resources(struct ath10k *ar,
 
 		if (!ATH10K_USB_IS_DIR_IN(pipe->ep_address))
 			pipe->flags |= ATH10K_USB_PIPE_FLAG_TX;
+
+#if defined(__FreeBSD__)
+		/* LinuxKPI needs a FreeBSD transfer for each endpoint. */
+		if (ATH10K_USB_IS_BULK_EP(endpoint->bmAttributes) ||
+		    ATH10K_USB_IS_INT_EP(endpoint->bmAttributes)) {
+			ret = usb_setup_endpoint(ar_usb->udev,
+			    &iface_desc->endpoint[i],
+			    ATH10K_USB_IS_DIR_IN(pipe->ep_address) ?
+			    ATH10K_USB_RX_BUFFER_SIZE : ATH10K_HTC_MAX_LEN);
+			if (ret) {
+				ath10k_err(ar, "usb_setup_endpoint %#x failed: %d\n",
+					   pipe->ep_address, ret);
+				return ret;
+			}
+		}
+#endif
 
 		ret = ath10k_usb_alloc_pipe_resources(ar, pipe, urbcount);
 		if (ret)
@@ -1012,6 +1047,7 @@ static int ath10k_usb_probe(struct usb_interface *interface,
 	struct ath10k *ar;
 	struct ath10k_usb *ar_usb;
 	struct usb_device *dev = interface_to_usbdev(interface);
+	struct device *core_dev;
 	int ret, vendor_id, product_id;
 	enum ath10k_hw_rev hw_rev;
 	struct ath10k_bus_params bus_params = {};
@@ -1024,10 +1060,16 @@ static int ath10k_usb_probe(struct usb_interface *interface,
 	 */
 	hw_rev = ATH10K_HW_QCA9377;
 
-	ar = ath10k_core_create(sizeof(*ar_usb), &dev->dev, ATH10K_BUS_USB,
+#if defined(__linux__)
+	core_dev = &dev->dev;
+#elif defined(__FreeBSD__)
+	/* struct usb_device has no struct device; use the interface's. */
+	core_dev = &interface->dev;
+#endif
+	ar = ath10k_core_create(sizeof(*ar_usb), core_dev, ATH10K_BUS_USB,
 				hw_rev, &ath10k_usb_hif_ops);
 	if (!ar) {
-		dev_err(&dev->dev, "failed to allocate core\n");
+		dev_err(core_dev, "failed to allocate core\n");
 		return -ENOMEM;
 	}
 

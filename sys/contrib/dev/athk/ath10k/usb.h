@@ -9,6 +9,18 @@
 #ifndef _USB_H_
 #define _USB_H_
 
+#ifdef __FreeBSD__
+#include <dev/usb/usb_device.h>
+#endif
+
+#ifdef __FreeBSD__
+typedef struct usb_host_endpoint *usb_host_endpoint_t;
+#elif defined __linux__
+typedef unsigned int usb_host_endpoint_t;
+#else
+#error unknown OS
+#endif
+
 /* constants */
 #define TX_URB_COUNT               32
 #define RX_URB_COUNT               32
@@ -76,7 +88,7 @@ struct ath10k_usb_pipe {
 	u32 urb_alloc;
 	u32 urb_cnt;
 	u32 urb_cnt_thresh;
-	unsigned int usb_pipe_handle;
+	usb_host_endpoint_t usb_pipe_handle;
 	u32 flags;
 	u8 ep_address;
 	u8 logical_pipe_num;
