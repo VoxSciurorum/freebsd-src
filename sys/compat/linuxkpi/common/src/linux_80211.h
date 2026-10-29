@@ -232,6 +232,7 @@ struct lkpi_vif {
 				    const struct ieee80211_rx_stats *,
 				    int, int);
 	struct task		sw_scan_task;
+	int			sw_scan_flags;	/* net80211 scan flags */
 
 	struct list_head	lsta_list;
 
