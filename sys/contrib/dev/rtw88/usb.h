@@ -14,7 +14,7 @@ typedef enum usb_dev_speed usb_device_speed_t;
 typedef struct usb_host_endpoint *usb_host_endpoint_t;
 #elif defined __linux__
 typedef enum usb_device_speed usb_device_speed_t;
-typedef int usb_host_endpoint_t;
+typedef unsigned int usb_host_endpoint_t;
 #else
 #error unknown OS
 #endif
